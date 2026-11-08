@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  const APP_VERSION = '1.4.2';   // ให้ตรงกับ VERSION ใน sw.js
+  const APP_VERSION = '1.4.3';   // ให้ตรงกับ VERSION ใน sw.js
 
   // ───────────────────────── Constants ─────────────────────────
   const ROLE_LABEL = { admin: 'ผู้ดูแลระบบ', scheduler: 'ผู้จัดบิน', commander: 'ผู้บังคับบัญชา', documents: 'ผู้ดูแลเอกสาร', viewer: 'ผู้ชม' };
@@ -76,7 +76,7 @@
     return { id: rid(), aircraftTail: '', aircraftLabel: '', aircraftType: '', acRole: '', pairTail: '', pairLabel: '',
       type: 'ภารกิจ', title: '', callsign: '', route: '', fuel: '',
       times: { brief: '', tow: '', takeoff: '', towMode: 'tow' }, pax: '', parking: { out: '', ret: '' },
-      director: blankVip(), acCommander: blankVip(), crew: [], poc: '', dress: '', notes: '' };
+      director: blankVip(), acCommander: blankVip(), hospitality: { on: false, detail: '' }, crew: [], poc: '', dress: '', notes: '' };
   }
   function blankOrder() {
     return { title: S.settings.unitTitle,
@@ -99,6 +99,7 @@
     const missions = (o.missions || []).map(m => Object.assign(blankMission(), m, {
       times: Object.assign({ brief: '', tow: '', takeoff: '', towMode: 'tow' }, m.times), parking: Object.assign({ out: '', ret: '' }, m.parking),
       director: Object.assign(blankVip(), m.director), acCommander: Object.assign(blankVip(), m.acCommander),
+      hospitality: Object.assign({ on: false, detail: '' }, m.hospitality),
       fuel: String(m.fuel || '').replace(/[^\d.]/g, ''),
       crew: (m.crew || []).map(c => Object.assign({ id: '', name: '', dept: '', role: '' }, c)),
     }));
@@ -558,8 +559,6 @@
       const tk = typeKey(m.aircraftType);
       const acOpts = acList.slice();
       if (m.aircraftTail && !acOpts.some(a => a.tail === m.aircraftTail)) acOpts.push({ tail: m.aircraftTail, type: m.aircraftType, designation: '', status: '' });
-      const pairOpts = acList.filter(a => a.tail !== m.aircraftTail);
-      if (m.pairTail && !pairOpts.some(a => a.tail === m.pairTail)) pairOpts.push({ tail: m.pairTail, type: '', designation: m.pairLabel, status: '' });
       const crew = m.crew.map((c, j) => {
         const p = S.crewById[c.id];
         const otherMissions = (dups[c.id] || []).filter(n => n !== i + 1);
@@ -598,9 +597,8 @@
               <option value="" ${!m.acRole ? 'selected' : ''}>— ไม่ระบุ —</option>
               <option value="primary" ${m.acRole === 'primary' ? 'selected' : ''}>ภารกิจนี้เป็น บ.จริง</option>
               <option value="spare" ${m.acRole === 'spare' ? 'selected' : ''}>ภารกิจนี้เป็น บ.สำรอง</option></select></label>
-            ${m.acRole ? `<label class="field"><span>${m.acRole === 'primary' ? 'บ.สำรอง คือเครื่อง' : 'เป็น บ.สำรองของ บ.จริง เครื่อง'}</span>
-              <select data-act-change="pair" data-m="${i}"><option value="">— เลือกเครื่อง —</option>
-              ${pairOpts.map(a => `<option value="${esc(a.tail)}" ${a.tail === m.pairTail ? 'selected' : ''}>${esc(aircraftLabel(a))}</option>`).join('')}</select></label>` : '<span></span>'}
+            ${m.acRole ? inp(`missions.${i}.pairLabel`, m.acRole === 'primary' ? 'บ.สำรอง คือเครื่อง' : 'เป็น บ.สำรองของ บ.จริง เครื่อง', m.pairLabel || m.pairTail,
+              'placeholder="เช่น A340 (60204) หรือ บ.ของฝูงบินอื่น" maxlength="120"') : '<span></span>'}
           </div>
           <label class="field"><span>ภารกิจ</span><textarea data-bind="missions.${i}.title" rows="2">${esc(m.title)}</textarea></label>
           ${inp(`missions.${i}.route`, 'เส้นทางบิน', m.route, 'placeholder="เช่น บน.6 – บน.23 – บน.6"')}
@@ -609,13 +607,15 @@
             <div class="field"><select class="mini" data-bind="missions.${i}.times.towMode" aria-label="เลือกเวลาลากหรือ TAXI">
                 <option value="tow" ${m.times.towMode !== 'taxi' ? 'selected' : ''}>เวลาลาก</option><option value="taxi" ${m.times.towMode === 'taxi' ? 'selected' : ''}>เวลา TAXI</option></select>
               <input data-bind="missions.${i}.times.tow" value="${esc(m.times.tow)}" inputmode="numeric" placeholder="0650" maxlength="5" data-time aria-label="เวลาลาก หรือ TAXI"></div>
-            ${inp(`missions.${i}.times.takeoff`, 'เวลาวิ่งขึ้น', m.times.takeoff, 'inputmode="numeric" placeholder="0730" maxlength="5" data-time')}
+            ${inp(`missions.${i}.times.takeoff`, 'เวลาวิ่งขึ้น', m.times.takeoff, 'placeholder="0730 หรือ เมื่อได้รับการประสาน" maxlength="100"')}
           </div>
           <div class="grid g2">
             ${inp(`missions.${i}.parking.out`, 'จุดจอดขาไป', m.parking.out)}
             ${inp(`missions.${i}.parking.ret`, 'จุดจอดขากลับ', m.parking.ret)}
           </div>
           <div class="grid g2">${vipBlock(i, 'director', 'ผอ.เดินทาง', m.director)}${vipBlock(i, 'acCommander', 'ผู้บังคับ บ.', m.acCommander)}</div>
+          <div class="vip ${m.hospitality.on ? 'on' : ''}"><label class="row"><input type="checkbox" data-bool="missions.${i}.hospitality.on" ${m.hospitality.on ? 'checked' : ''}> มีจัดรับรอง</label>
+            ${m.hospitality.on ? `<label class="field" style="margin-top:6px"><span>รายละเอียดการจัดรับรอง</span><textarea data-bind="missions.${i}.hospitality.detail" rows="2" placeholder="เช่น สถานที่ เวลา จำนวนผู้รับรอง ผู้ประสาน">${esc(m.hospitality.detail)}</textarea></label>` : ''}</div>
           <div class="subhead">นักบิน (${m.crew.length})</div>
           <div class="crew-list">${crew || '<div class="muted small">ยังไม่มีนักบิน</div>'}</div>
           <div><button class="btn sm" data-act="pick-crew" data-m="${i}">＋ เพิ่มนักบิน</button></div>
@@ -744,7 +744,7 @@
         <table><tbody>
         ${row('ประเภท', esc(x.type))}${row('บ.จริง / บ.สำรอง', role)}${row('ภารกิจ', x.title, true)}${row('Callsign', esc(x.callsign))}${row('เส้นทางบิน', esc(x.route))}
         ${row('เชื้อเพลิง', x.fuel !== '' ? esc(fmtFuel(x.fuel)) + ' TONS' : '')}${row('เวลา', times)}${row('ผู้โดยสาร', esc(x.pax))}
-        ${row('ผอ.เดินทาง', vip(x.director))}${row('ผู้บังคับ บ.', vip(x.acCommander))}${row('จุดจอด', park)}
+        ${row('ผอ.เดินทาง', vip(x.director))}${row('ผู้บังคับ บ.', vip(x.acCommander))}${x.hospitality && x.hospitality.on ? row('จัดรับรอง', x.hospitality.detail || 'มี', true) : ''}${row('จุดจอด', park)}
         ${row('นักบิน', crew ? `<div class="d-crew">${crew}</div>` : '')}${row('POC', esc(x.poc))}${row('การแต่งกาย', esc(x.dress))}${row('หมายเหตุ', x.notes, true)}
         </tbody></table></div>`;
     }).join('');
