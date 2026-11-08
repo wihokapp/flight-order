@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  const APP_VERSION = '1.7.0';   // ให้ตรงกับ VERSION ใน sw.js
+  const APP_VERSION = '1.8.0';   // ให้ตรงกับ VERSION ใน sw.js
 
   // ───────────────────────── Constants ─────────────────────────
   const ROLE_LABEL = { admin: 'ผู้ดูแลระบบ', scheduler: 'ผู้จัดบิน', commander: 'ผู้บังคับบัญชา', documents: 'ผู้ดูแลเอกสาร', viewer: 'ผู้ชม' };
@@ -498,7 +498,9 @@
       const r = await API.call('login', { username, password });
       API.setToken(r.token);
       S.user = r.user;
-      await bootstrap();
+      const dl = S.deepLink; S.deepLink = null;
+      if (dl) S.date = dl.from;
+      await bootstrap(dl || undefined);
     } catch (e) {
       if (errEl) errEl.textContent = e.message;
     } finally { busy(false); }
@@ -576,6 +578,8 @@
         <div class="small muted" style="padding:6px 12px">${esc(u.username)} · ${esc(ROLE_LABEL[u.role])}<br>เวอร์ชัน ${APP_VERSION}</div>
         <button data-act="change-pw">🔑 เปลี่ยนรหัสผ่าน</button>
         <button data-act="refresh-crew">↻ โหลดรายชื่อนักบินล่าสุด</button>
+        ${S.settings.lineConfigured && ['admin', 'scheduler', 'commander'].includes(u.role) ? '<button data-act="line-self">🔔 รับแจ้งเตือนทาง LINE</button>' : ''}
+        ${API.DEMO && S.settings.lineConfigured ? '<button data-act="line-demo-log">📨 ข้อความ LINE ที่ส่ง (ทดลอง)</button>' : ''}
         ${API.DEMO ? '<button data-act="demo-reset">🧪 รีเซ็ตข้อมูลทดลอง</button>' : ''}
         <button data-act="logout">⎋ ออกจากระบบ</button>
       </div>`;
@@ -1390,6 +1394,7 @@
     v.innerHTML = `<section class="card">
       <div class="card-head"><h2>รายชื่อนักบิน</h2><span class="spacer"></span>
         <button class="btn sm ghost" data-act="pilots-reload">↻ โหลดใหม่</button>
+        ${S.settings.lineConfigured ? '<button class="btn sm ghost" data-act="pilot-line-print">🖨️ พิมพ์ QR LINE (ยังไม่ลงทะเบียน)</button>' : ''}
         <button class="btn sm primary" data-act="pilot-new">＋ เพิ่มนักบิน</button></div>
       <p class="small muted" style="margin-top:0">แก้ไขลง Google Sheets CRM602 (แท็บ Crew) โดยตรง ระบบอื่นที่ใช้ชีตนี้จะเห็นการเปลี่ยนแปลงด้วย ·
         "ปิดใช้งาน" จะซ่อนจากรายการเลือกชื่อ แต่ไม่ลบข้อมูล (ชั่วโมงบิน/คุณสมบัติ/ประวัติยังอยู่) · ใบจัดบินที่บันทึกไปแล้วยังใช้ชื่อเดิม</p>
@@ -1404,7 +1409,10 @@
     $('#plQ').oninput = e => { ui.q = e.target.value; drawPilots(); };
     $('#plF').onchange = e => { ui.filter = e.target.value; drawPilots(); };
     if (!S.pilotsFresh) {
-      try { setCrew(await api('getCrew', { refresh: true }, { quiet: true })); S.pilotsFresh = true; } catch (e) { /* toasted */ }
+      try {
+        const [c] = await Promise.all([api('getCrew', { refresh: true }, { quiet: true }), loadLineLinks()]);
+        setCrew(c); S.pilotsFresh = true;
+      } catch (e) { /* toasted */ }
     }
     drawPilots();
   }
@@ -1417,13 +1425,16 @@
     if (!S.crew.configured && !all.length) { el.innerHTML = '<div class="banner warn">ยังไม่ได้เชื่อม Google Sheets รายชื่อ (ผู้ดูแลระบบตั้งค่าได้ที่แท็บ "ตั้งค่า")</div>'; return; }
     const nAct = all.filter(p => p.active !== false).length;
     el.innerHTML = `<p class="small muted" style="margin:0 0 6px">ใช้งาน ${nAct} คน · ปิดใช้งาน ${all.length - nAct} คน · แสดง ${rows.length} คน</p>
-      <div class="tbl-wrap"><table class="tbl cards"><thead><tr><th>รหัส</th><th>ยศ</th><th>ชื่อ</th><th>นามสกุล</th><th>ชื่อในใบจัดบิน</th><th>สถานะ</th><th></th></tr></thead><tbody>
+      <div class="tbl-wrap"><table class="tbl cards"><thead><tr><th>รหัส</th><th>ยศ</th><th>ชื่อ</th><th>นามสกุล</th><th>ชื่อในใบจัดบิน</th><th>สถานะ</th>${S.settings.lineConfigured ? '<th>LINE</th>' : ''}<th></th></tr></thead><tbody>
       ${rows.length ? rows.map(p => `<tr class="${p.active === false ? 'muted' : ''}"><td data-k="รหัส">${esc(p.id)}</td><td data-k="ยศ">${esc(p.rank)}</td>
         <td data-k="ชื่อ"><b>${esc(p.first)}</b></td><td data-k="นามสกุล">${esc(p.last)}</td><td data-k="ในใบ">${esc(p.short)}</td>
         <td data-k="สถานะ">${p.active === false ? '<span class="chip DENIED">ปิดใช้งาน</span>' : '<span class="chip APPROVED">ใช้งาน</span>'}</td>
+        ${S.settings.lineConfigured ? `<td data-k="LINE">${lineBadge('pilot:' + p.id)}</td>` : ''}
         <td><div class="row" style="gap:4px;flex-wrap:nowrap"><button class="btn sm ghost" data-act="pilot-edit" data-id="${esc(p.id)}">แก้ไข</button>
+          ${S.settings.lineConfigured && p.active !== false ? `<button class="btn sm ghost" data-act="pilot-line" data-id="${esc(p.id)}" title="QR ลงทะเบียน LINE">QR LINE</button>` : ''}
+          ${S.lineLinks && S.lineLinks.links && S.lineLinks.links['pilot:' + p.id] ? `<button class="btn sm ghost" data-act="pilot-line-unlink" data-id="${esc(p.id)}" data-name="${esc(p.short)}" title="ยกเลิกการเชื่อม LINE">✕ LINE</button>` : ''}
           <button class="btn sm ${p.active === false ? 'ghost' : 'danger-ghost'}" data-act="pilot-toggle" data-id="${esc(p.id)}">${p.active === false ? 'เปิดใช้งาน' : 'ปิดใช้งาน'}</button></div></td></tr>`).join('')
-        : '<tr><td colspan="7" class="muted">ไม่พบรายชื่อ</td></tr>'}</tbody></table></div>`;
+        : '<tr><td colspan="8" class="muted">ไม่พบรายชื่อ</td></tr>'}</tbody></table></div>`;
   }
   async function pilotForm(p) {
     const isNew = !p.id;
@@ -1470,19 +1481,107 @@
     },
   });
 
+  // ───────────────────────── LINE: ลงทะเบียนด้วย QR + สถานะ ─────────────────────────
+  function qrSvg(text, size) {
+    if (typeof qrcode !== 'function') return '<p class="form-error">โหลดตัวสร้าง QR ไม่ได้</p>';
+    const qr = qrcode(0, 'M'); qr.addData(text); qr.make();
+    return qr.createSvgTag({ cellSize: 4, margin: 2, scalable: true }).replace('<svg ', `<svg style="width:${size || 220}px;height:${size || 220}px" role="img" aria-label="QR ลงทะเบียน LINE" `);
+  }
+  const expTh = ms => thaiTs(ymd(new Date(ms)) + ' ' + new Date(ms).toTimeString().slice(0, 5));
+  async function loadLineLinks() {
+    if (!S.settings.lineConfigured) { S.lineLinks = null; return; }
+    try { S.lineLinks = await api('lineLinks', {}, { quiet: true, silent: true }); } catch (e) { S.lineLinks = null; }
+  }
+  function lineBadge(key) {
+    const l = S.lineLinks && S.lineLinks.links && S.lineLinks.links[key];
+    if (!l) return '<span class="muted small">—</span>';
+    return l.status === 'active' ? '<span class="chip APPROVED" title="ลงทะเบียนเมื่อ ' + esc(thaiTs(l.linkedAt)) + '">✅ เชื่อมแล้ว</span>' : '<span class="chip DENIED" title="ผู้ใช้บล็อก LINE OA">⛔ บล็อก</span>';
+  }
+  /** แสดง QR ลงทะเบียน 1 คน */
+  async function showLineQr(c, opts) {
+    opts = opts || {};
+    const linked = S.lineLinks && S.lineLinks.links && S.lineLinks.links[c.key];
+    const res = await modal({ title: 'ลงทะเบียนรับแจ้งเตือนทาง LINE', body: `<div class="qr-box">
+        <div class="qr-name">${esc(c.name)}</div>
+        ${qrSvg(c.url, 230)}
+        <div class="qr-code">รหัส <b>${esc(c.code)}</b></div>
+        <ol class="small qr-steps"><li>สแกน QR ด้วยกล้องมือถือ หรือแอป LINE</li><li>กด <b>เพิ่มเพื่อน</b> LINE OA (ถ้ายังไม่ได้เพิ่ม)</li><li>กด <b>ส่ง</b> ข้อความ "REG ${esc(c.code)}" ที่พิมพ์ไว้ให้</li></ol>
+        <p class="small muted">ใช้ได้ครั้งเดียว · หมดอายุ ${esc(expTh(c.expiresAt))} · LINE OA: ${esc(S.lineLinks && S.lineLinks.basicId || '')}</p>
+        ${linked && linked.status === 'active' ? '<div class="banner info" style="margin-top:6px">คนนี้เชื่อม LINE อยู่แล้ว — ถ้าลงทะเบียนใหม่จะเปลี่ยนเป็นบัญชี LINE ใหม่</div>' : ''}
+      </div>`,
+      foot: [].concat(
+        API.DEMO ? [{ label: '🧪 จำลองการสแกนและส่ง', cls: 'ghost', value: 'sim' }] : [],
+        [{ label: 'เปิดใน LINE', cls: 'ghost', value: 'open' }, { label: 'คัดลอกลิงก์', cls: 'ghost', value: 'copy' }, { label: 'ปิด', cls: 'primary', value: null }]) });
+    if (res === 'open') window.open(c.url, '_blank', 'noopener');
+    if (res === 'copy' && navigator.clipboard) { await navigator.clipboard.writeText(c.url); toast('คัดลอกลิงก์แล้ว'); }
+    if (res === 'sim') {
+      const reply = await API.demoSimulateLine('REG ' + c.code, 'Udemo' + c.key.replace(/\W/g, '') + Math.random().toString(16).slice(2, 10));
+      toast('LINE ตอบกลับ: ' + (reply ? reply.text.split('\n')[0] : '—'));
+      await loadLineLinks();
+      if (opts.after) opts.after();
+    }
+  }
+  async function issueAndShow(key, after) {
+    const r = await api('lineIssueCodes', { keys: [key] });
+    if (!S.lineLinks) await loadLineLinks();
+    await showLineQr(r.codes[0], { after });
+  }
+  /** พิมพ์ QR ของนักบินที่ยังไม่ลงทะเบียนทั้งหมด (แผ่นละ 6 คน) */
+  async function printLineQrs() {
+    const links = (S.lineLinks && S.lineLinks.links) || {};
+    const todo = (S.crew.people || []).filter(p => p.active !== false && !(links['pilot:' + p.id] && links['pilot:' + p.id].status === 'active'));
+    if (!todo.length) { toast('นักบินทุกคนลงทะเบียน LINE แล้ว'); return; }
+    if (!(await confirmBox('พิมพ์ QR ลงทะเบียน LINE', `ออกรหัสใหม่และพิมพ์ QR ให้นักบินที่ยังไม่ลงทะเบียน <b>${todo.length} คน</b>? (รหัสเดิมที่ยังไม่ใช้จะใช้ไม่ได้)`, 'ออกรหัสและพิมพ์', 'primary'))) return;
+    const r = await api('lineIssueCodes', { keys: todo.map(p => 'pilot:' + p.id) });
+    $('#printRoot').innerHTML = `<div class="qr-sheet">${r.codes.map(c => `<div class="qr-card">
+        <div class="qr-name">${esc(c.name)}</div>${qrSvg(c.url, 160)}
+        <div class="qr-code">รหัส <b>${esc(c.code)}</b></div>
+        <div class="qr-hint">สแกน → เพิ่มเพื่อน ${esc(r.basicId)} → กดส่งข้อความ<br>เพื่อรับแจ้งเตือนใบจัดบินทาง LINE · หมดอายุ ${esc(expTh(c.expiresAt))}</div></div>`).join('')}</div>`;
+    setTimeout(() => window.print(), 80);
+  }
+  async function lineSelf() {
+    await loadLineLinks();
+    if (!S.lineLinks || !S.lineLinks.configured) { toast('ผู้ดูแลระบบยังไม่ได้ตั้งค่า LINE OA', true); return; }
+    if (S.lineLinks.me === 'active') {
+      const v = await modal({ title: 'แจ้งเตือนทาง LINE', body: `<p>บัญชีของท่านเชื่อม LINE แล้ว ✅</p><p class="small muted">${S.user.role === 'commander' ? 'จะได้รับแจ้งเมื่อมีใบจัดบินส่งขออนุมัติ' : 'จะได้รับแจ้งเมื่อใบจัดบินที่ท่านส่งขออนุมัติได้รับอนุมัติหรือไม่อนุมัติ'}</p>`,
+        foot: [{ label: 'ยกเลิกการเชื่อม', cls: 'danger-ghost', value: 'unlink' }].concat(can('settings') ? [{ label: 'ส่งข้อความทดสอบ', cls: 'ghost', value: 'test' }] : [], [{ label: 'ปิด', cls: 'primary', value: null }]) });
+      if (v === 'unlink') { await api('lineUnlink', { key: 'user:' + S.user.username }); toast('ยกเลิกการเชื่อม LINE แล้ว'); }
+      if (v === 'test') { await api('lineTest', {}); toast('ส่งข้อความทดสอบแล้ว'); }
+      return;
+    }
+    await issueAndShow('user:' + S.user.username);
+  }
+  async function showDemoLineLog() {
+    const log = await API.demoLineLog();
+    await modal({ title: 'ข้อความ LINE ที่ระบบส่ง (โหมดทดลอง)', body: log.length ? log.map(m => `<div class="line-msg"><div class="small muted">${esc(m.kind === 'reply' ? 'ตอบกลับ' : 'ส่งถึง ' + m.to.slice(0, 18) + '…')} · ${esc(new Date(m.at).toLocaleTimeString('th-TH'))}</div><div class="line-bubble">${esc(m.text).replace(/\n/g, '<br>')}</div></div>`).join('')
+      : '<p class="muted">ยังไม่มีข้อความ — ลองลงทะเบียน LINE แล้ว release / ส่งขออนุมัติ</p>', foot: [{ label: 'ปิด', cls: 'primary', value: null }] });
+  }
+  Object.assign(ACTIONS, {
+    'line-self': () => { $('#menu').hidden = true; return lineSelf(); },
+    'line-demo-log': () => { $('#menu').hidden = true; return showDemoLineLog(); },
+    'pilot-line': el => issueAndShow('pilot:' + el.dataset.id, drawPilots),
+    'pilot-line-print': printLineQrs,
+    'pilot-line-unlink': async el => {
+      if (!(await confirmBox('ยกเลิกการเชื่อม LINE', 'ยกเลิกการเชื่อม LINE ของ ' + esc(el.dataset.name) + '? (จะไม่ได้รับแจ้งเตือนจนกว่าจะลงทะเบียนใหม่)', 'ยกเลิกการเชื่อม', 'bad'))) return;
+      S.lineLinks = await api('lineUnlink', { key: 'pilot:' + el.dataset.id }); drawPilots();
+    },
+    'user-line': el => issueAndShow('user:' + el.dataset.u, () => renderView()),
+  });
+
   // ───────────────────────── Users tab (admin) ─────────────────────────
   async function viewUsers(v) {
     v.innerHTML = `<section class="card"><div class="card-head"><h2>ผู้ใช้งาน</h2><span class="spacer"></span><button class="btn sm primary" data-act="user-new">＋ เพิ่มผู้ใช้</button></div>
       <div class="small muted" style="margin-bottom:8px">admin: ทำได้ทุกอย่าง · ผู้จัดบิน: สร้าง/แก้ใบจัดบิน แก้สถานภาพ release · ผู้บังคับบัญชา: อนุมัติ/ไม่อนุมัติ · ผู้ดูแลเอกสาร: ดูและพิมพ์ใบทุกสถานะ (แก้ไขไม่ได้) · ผู้ชม: ดูใบที่ release แล้ว</div>
       <div id="uList"><p class="muted">กำลังโหลด…</p></div></section>`;
     try {
-      S.users = await api('listUsers', {}, { quiet: true });
+      [S.users] = await Promise.all([api('listUsers', {}, { quiet: true }), loadLineLinks()]);
       const el = $('#uList'); if (!el) return;
-      el.innerHTML = `<div class="tbl-wrap"><table class="tbl cards"><thead><tr><th>ชื่อผู้ใช้</th><th>ชื่อที่แสดง</th><th>สิทธิ์</th><th>สถานะ</th><th>เข้าระบบล่าสุด</th><th></th></tr></thead><tbody>
+      el.innerHTML = `<div class="tbl-wrap"><table class="tbl cards"><thead><tr><th>ชื่อผู้ใช้</th><th>ชื่อที่แสดง</th><th>สิทธิ์</th><th>สถานะ</th>${S.settings.lineConfigured ? '<th>LINE</th>' : ''}<th>เข้าระบบล่าสุด</th><th></th></tr></thead><tbody>
         ${S.users.map((u, i) => `<tr><td data-k="ชื่อผู้ใช้"><b>${esc(u.username)}</b></td><td data-k="ชื่อ">${esc(u.displayName)}</td><td data-k="สิทธิ์">${esc(ROLE_LABEL[u.role] || u.role)}</td>
           <td data-k="สถานะ">${u.active ? (u.mustChange ? '<span class="chip PENDING">รอเปลี่ยนรหัส</span>' : '<span class="chip APPROVED">ใช้งาน</span>') : '<span class="chip DENIED">ปิดใช้งาน</span>'}</td>
+          ${S.settings.lineConfigured ? `<td data-k="LINE">${lineBadge('user:' + u.username)}</td>` : ''}
           <td data-k="ล่าสุด" class="small">${esc(thaiTs(u.lastLogin)) || '—'}</td>
-          <td><div class="row" style="gap:4px"><button class="btn sm ghost" data-act="user-edit" data-i="${i}">แก้ไข</button><button class="btn sm ghost" data-act="user-reset" data-i="${i}">รีเซ็ตรหัส</button></div></td></tr>`).join('')}
+          <td><div class="row" style="gap:4px"><button class="btn sm ghost" data-act="user-edit" data-i="${i}">แก้ไข</button><button class="btn sm ghost" data-act="user-reset" data-i="${i}">รีเซ็ตรหัส</button>${S.settings.lineConfigured && ['admin', 'scheduler', 'commander'].includes(u.role) ? `<button class="btn sm ghost" data-act="user-line" data-u="${esc(u.username)}">QR LINE</button>` : ''}</div></td></tr>`).join('')}
       </tbody></table></div>`;
     } catch (e) { const el = $('#uList'); if (el) el.innerHTML = `<p class="form-error">${esc(e.message)}</p>`; }
   }
@@ -1538,8 +1637,33 @@
       </form></section>
       <section class="card"><h2>ฐานข้อมูล</h2><p class="small">ใบจัดบิน ผู้ใช้ สถานภาพเครื่องบิน และ log ทั้งหมดอยู่ในไฟล์:<br>
         ${API.DEMO ? esc(st.dbUrl) : `<a href="${esc(st.dbUrl)}" target="_blank" rel="noopener">${esc(st.dbUrl)}</a>`}</p></section>
+      <section class="card"><div class="card-head"><h2>LINE OA แจ้งเตือน</h2><span class="spacer"></span>
+          ${st.lineConfigured ? `<span class="chip APPROVED">เชื่อมแล้ว ${esc(st.lineBasicId)}</span>` : '<span class="chip NEW">ยังไม่ได้ตั้งค่า</span>'}</div>
+        <form id="lnForm" class="grid">
+          <label class="field"><span>Channel access token (long-lived) จาก LINE Developers → Messaging API</span>
+            <input name="lineToken" type="password" autocomplete="off" placeholder="${st.lineConfigured ? 'ตั้งค่าแล้ว — เว้นว่างถ้าไม่เปลี่ยน' : 'วาง token ที่นี่'}"></label>
+          <label class="field"><span>ลิงก์แอป (ใส่ในข้อความแจ้งเตือน)</span><input name="appUrl" value="${esc(st.appUrl || (location.origin + location.pathname))}" placeholder="https://<user>.github.io/<repo>/"></label>
+          <div class="small muted">Webhook URL ที่ต้องใส่ใน LINE Developers (เปิด Use webhook):<br><code class="sel">${esc((window.APP_CONFIG && window.APP_CONFIG.API_URL) || '(โหมดทดลอง)')}</code><br>
+            แจ้งเตือน: release → นักบินในใบ · ส่งขออนุมัติ → ผู้บังคับบัญชา · อนุมัติ/ไม่อนุมัติ → ผู้ที่ส่งขออนุมัติ</div>
+          <div class="form-error" id="lnErr"></div>
+          <div class="row"><button class="btn primary" type="submit">บันทึกและตรวจ token</button>
+            ${st.lineConfigured ? '<button class="btn ghost" type="button" id="lnTest">ส่งข้อความทดสอบหาตัวเอง</button><button class="btn danger-ghost" type="button" id="lnOff">ยกเลิกการเชื่อม LINE</button>' : ''}</div>
+        </form></section>
       <section class="card" id="holCard"></section>`;
     drawHolidays(new Date().getFullYear());
+    $('#lnForm').onsubmit = async e => {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      try {
+        const r = await api('saveSettings', { settings: { lineToken: String(fd.get('lineToken') || '').trim(), appUrl: String(fd.get('appUrl') || '').trim() } }, { silent: true });
+        S.settings.lineConfigured = !!(r.lineConfigured && r.lineBasicId); toast('บันทึกแล้ว' + (r.lineBasicId ? ' — LINE OA ' + r.lineBasicId : '')); renderShell(); S.tab = 'settings'; renderView();
+      } catch (e2) { $('#lnErr').textContent = e2.message; }
+    };
+    if ($('#lnTest')) $('#lnTest').onclick = async () => { try { await api('lineTest', {}, { silent: true }); toast('ส่งข้อความทดสอบแล้ว'); } catch (e2) { $('#lnErr').textContent = e2.message; } };
+    if ($('#lnOff')) $('#lnOff').onclick = async () => {
+      if (!(await confirmBox('ยกเลิกการเชื่อม LINE', 'ลบ token และหยุดส่งแจ้งเตือนทาง LINE ทั้งหมด? (รายชื่อที่ลงทะเบียนไว้ยังอยู่)', 'ยกเลิกการเชื่อม', 'bad'))) return;
+      await api('saveSettings', { settings: { lineToken: '-' } }); S.settings.lineConfigured = false; renderShell(); S.tab = 'settings'; renderView();
+    };
     $('#stForm').onsubmit = async e => {
       e.preventDefault();
       const fd = new FormData(e.target);
@@ -1669,7 +1793,19 @@
   window.addEventListener('beforeunload', e => { if (S.user && (anyDirty() || (S.sync && S.sync.busy))) { e.preventDefault(); e.returnValue = ''; } });
 
   // ───────────────────────── Start ─────────────────────────
+  /** ลิงก์จากข้อความ LINE: ...#from=2026-12-05&to=2026-12-08 → เปิดช่วงนั้น */
+  function takeDeepLink() {
+    const m = location.hash.match(/from=(\d{4}-\d{2}-\d{2})(?:&to=(\d{4}-\d{2}-\d{2}))?/);
+    if (!m) return null;
+    try { history.replaceState(null, '', location.pathname + location.search.replace(/[?&]openExternalBrowser=1/, '').replace(/^&/, '?')); } catch (e) { /* ignore */ }
+    return { from: m[1], to: m[2] || m[1] };
+  }
+  S.deepLink = takeDeepLink();
   async function start() {
+    if (API.token && S.deepLink) {
+      const dl = S.deepLink; S.deepLink = null; S.date = dl.from;
+      try { await bootstrap(dl); return; } catch (e) { /* token หมดอายุ → login แล้วค่อยเปิด */ S.deepLink = dl; }
+    }
     if (API.token) {
       // เปิดจาก cache ทันที แล้วอัปเดตจาก server เบื้องหลัง
       const c = readCache(localStorage.getItem('fo602_lastuser'));
