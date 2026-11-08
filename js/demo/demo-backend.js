@@ -4,7 +4,7 @@
  */
 (function (root) {
   'use strict';
-  const STATE_KEY = 'fo602_demo_state_v4';
+  const STATE_KEY = 'fo602_demo_state_v5';
 
   const DEMO_USERS = [
     ['admin', 'ผู้ดูแลระบบ (ทดลอง)', 'admin', 'admin1234'],
@@ -85,6 +85,10 @@
     const H = [['2026-12-05', 'วันพ่อแห่งชาติ (ตัวอย่าง)'], ['2026-12-07', 'วันหยุดชดเชย (ตัวอย่าง)'],
       ['2026-12-10', 'วันรัฐธรรมนูญ (ตัวอย่าง)'], ['2026-12-31', 'วันสิ้นปี (ตัวอย่าง)'], ['2027-01-01', 'วันขึ้นปีใหม่ (ตัวอย่าง)']];
     hol.getRange(2, 1, H.length, 2).setValues(H);
+
+    // LINE OA ทดลอง (ไม่ส่งจริง — ดูข้อความที่ "ส่ง" ได้จากเมนูผู้ใช้)
+    const P = env.PropertiesService.getScriptProperties();
+    P.setProperty('LINE_TOKEN', 'demo-token'); P.setProperty('LINE_BOT_ID', 'Udemobot0000000000000000000000000'); P.setProperty('LINE_BASIC_ID', '@demo602');
   }
 
   function createDemoBackend(source, opts) {
@@ -108,6 +112,17 @@
         return JSON.parse(out.getContent());
       },
       reset() { if (storage) storage.removeItem(STATE_KEY); },
+      /** จำลองว่าผู้ใช้ส่งข้อความหา OA (เช่น สแกน QR แล้วกดส่ง) */
+      simulateLine(text, userId) {
+        gs._resetDbCache();
+        gs.doPost({ postData: { contents: JSON.stringify({ destination: 'Udemobot0000000000000000000000000', events: [
+          { type: 'follow', replyToken: 'demo', source: { type: 'user', userId } },
+          { type: 'message', replyToken: 'demo', source: { type: 'user', userId }, message: { type: 'text', text } }] }) } });
+        save();
+        const log = env.store.lineSent || [];
+        return log[log.length - 1];
+      },
+      lineLog() { return (env.store.lineSent || []).slice().reverse(); },
       _gs: gs, _env: env, todayKey,
     };
   }
