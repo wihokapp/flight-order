@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  const APP_VERSION = '1.8.1';   // ให้ตรงกับ VERSION ใน sw.js
+  const APP_VERSION = '1.8.3';   // ให้ตรงกับ VERSION ใน sw.js
 
   // ───────────────────────── Constants ─────────────────────────
   const ROLE_LABEL = { admin: 'ผู้ดูแลระบบ', scheduler: 'ผู้จัดบิน', commander: 'ผู้บังคับบัญชา', documents: 'ผู้ดูแลเอกสาร', viewer: 'ผู้ชม' };
@@ -715,7 +715,7 @@
         ${dayActs.length ? `<div class="actions">${dayActs.join('')}</div>` : ''}
       </section>
       ${editable() ? editorHtml() : (S.order && !m.hidden ? `<section class="card"><div class="doc-wrap">${docHtml(activeDay())}</div></section>` : '')}
-      ${m.exists && m.log && m.log.length ? logHtml(m.log) : ''}`;
+      ${m.exists && m.log && m.log.length && S.user.role !== 'viewer' ? logHtml(m.log) : ''}`;
     $('#rFrom').onchange = e => { const f = e.target.value; if (!f) return; let t = $('#rTo').value; if (!t || t < f) t = f; loadRange(f, t, f).catch(() => {}); };
     $('#rTo').onchange = e => { const t = e.target.value; if (!t) return; let f = $('#rFrom').value; if (!f || f > t) f = t; loadRange(f, t).catch(() => {}); };
   }
@@ -1077,6 +1077,7 @@
         if (!m.crew.length) miss.push('นักบิน');
         else if (m.crew.some(c => !c.role)) miss.push('หน้าที่นักบิน');
         if (!m.times.takeoff.trim()) miss.push('เวลาวิ่งขึ้น');
+        if (!m.dress) miss.push('การแต่งกาย');
         if (miss.length) w.push('ภารกิจที่ ' + (i + 1) + ' ยังไม่มี' + miss.join(', '));
       });
       if (w.length) out.push('<b>' + esc(dayShort(d.date)) + '</b>: ' + w.map(esc).join(' · '));
