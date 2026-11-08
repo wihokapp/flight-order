@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  const APP_VERSION = '1.6.0';   // ให้ตรงกับ VERSION ใน sw.js
+  const APP_VERSION = '1.7.0';   // ให้ตรงกับ VERSION ใน sw.js
 
   // ───────────────────────── Constants ─────────────────────────
   const ROLE_LABEL = { admin: 'ผู้ดูแลระบบ', scheduler: 'ผู้จัดบิน', commander: 'ผู้บังคับบัญชา', documents: 'ผู้ดูแลเอกสาร', viewer: 'ผู้ชม' };
@@ -129,15 +129,28 @@
 
   // ───────────────────────── UI helpers ─────────────────────────
   let spinTimer = null, spinCount = 0;
+  let spinMsgTimers = [];
   function busy(on) {
-    spinCount += on ? 1 : -1;
+    spinCount = Math.max(0, spinCount + (on ? 1 : -1));
     clearTimeout(spinTimer);
     let el = $('#spinner');
     if (spinCount > 0) {
+      if (el) return;
       spinTimer = setTimeout(() => {
-        if (!$('#spinner')) { el = document.createElement('div'); el.id = 'spinner'; el.className = 'spinner'; el.innerHTML = '<div></div>'; document.body.appendChild(el); }
+        if ($('#spinner')) return;
+        el = document.createElement('div'); el.id = 'spinner'; el.className = 'spinner';
+        el.innerHTML = '<div class="spin-box"><div class="spin"></div><p class="spin-msg" role="status"></p></div>';
+        document.body.appendChild(el);
+        const msg = t => { const m = $('#spinner .spin-msg'); if (m) m.textContent = t; };
+        spinMsgTimers = [
+          setTimeout(() => msg('กำลังดำเนินการ… โปรดรอสักครู่'), 3000),
+          setTimeout(() => msg('เซิร์ฟเวอร์ตอบช้ากว่าปกติ — กรุณารอ อย่ากดซ้ำ'), 15000),
+        ];
       }, 250);
-    } else if (el) el.remove();
+    } else {
+      spinMsgTimers.forEach(clearTimeout); spinMsgTimers = [];
+      if (el) el.remove();
+    }
   }
   function toast(msg, err) {
     const el = document.createElement('div');
@@ -145,6 +158,7 @@
     document.body.appendChild(el);
     setTimeout(() => el.remove(), err ? 5000 : 2600);
   }
+  const WRITE_ACTIONS = ['saveOrder', 'saveBatch', 'submitBatch', 'approveBatch', 'denyBatch', 'releaseBatch', 'reviseOrder', 'deleteOrder', 'approveOrder', 'denyOrder', 'releaseOrder'];
   async function api(action, params, opts) {
     opts = opts || {};
     if (!opts.quiet) busy(true);
@@ -152,6 +166,12 @@
     catch (e) {
       if (e.code === 'AUTH') { S.user = null; render(); toast(e.message, true); throw e; }
       if (e.code === 'MUST_CHANGE') { S.user.mustChange = true; render(); throw e; }
+      if ((e.code === 'TIMEOUT' || e.code === 'NETWORK') && WRITE_ACTIONS.includes(action)) {
+        // ไม่รู้ว่า server ทำเสร็จหรือยัง → โหลดใบล่าสุดมาแสดงผลจริง (ร่างในเครื่องยังเก็บไว้)
+        toast(e.message + ' — กำลังโหลดใบล่าสุดเพื่อตรวจว่าบันทึกสำเร็จหรือไม่', true);
+        if (S.tab === 'order') setTimeout(() => reloadRange().catch(() => {}), 300);
+        e.handled = true; throw e;
+      }
       if (!opts.silent) toast(e.message, true);
       throw e;
     } finally { if (!opts.quiet) busy(false); }
@@ -218,12 +238,42 @@
     return { from: out[0], to: out[out.length - 1] };
   }
 
+  // ───────────────────────── Cache ในเครื่อง (เปิดแอป/เปลี่ยนวันได้ทันที แล้วอัปเดตตามหลัง) ─────────────────────────
+  // เก็บต่อผู้ใช้ใน localStorage · ลบทิ้งเมื่อออกจากระบบ · เก็บเฉพาะข้อมูลที่ได้จาก server (ไม่เก็บสถานะชั่วคราว)
+  const CACHE_MAX_DAYS = 60;
+  const cacheKey = u => 'fo602_cache_' + u;
+  function readCache(u) { try { return u ? JSON.parse(localStorage.getItem(cacheKey(u)) || 'null') : null; } catch (e) { return null; } }
+  function writeCache(fn) {
+    if (!S.user) return;
+    try {
+      const c = readCache(S.user.username) || { days: {} };
+      fn(c);
+      const keys = Object.keys(c.days);
+      if (keys.length > CACHE_MAX_DAYS) keys.sort((a, b) => c.days[a].at - c.days[b].at).slice(0, keys.length - CACHE_MAX_DAYS).forEach(k => delete c.days[k]);
+      localStorage.setItem(cacheKey(S.user.username), JSON.stringify(c));
+      localStorage.setItem('fo602_lastuser', S.user.username);
+    } catch (e) { /* เต็ม/ปิดไว้ → ทำงานต่อได้โดยไม่มี cache */ }
+  }
+  function cacheDays(list) { writeCache(c => list.forEach(r => { if (r && r.date) c.days[r.date] = { r, at: Date.now() }; })); }
+  function cacheBoot(patch) { writeCache(c => { c.user = S.user; c.boot = Object.assign(c.boot || {}, patch); }); }
+  function cachedRange(from, to) {
+    const c = readCache(S.user && S.user.username); if (!c) return null;
+    const days = [];
+    for (let d = from; d <= to; d = addDays(d, 1)) { const x = c.days[d]; if (!x) return null; days.push(x.r); if (days.length > 31) return null; }
+    return { from, to, days };
+  }
+  function clearCache() {
+    Object.keys(localStorage).filter(k => k.startsWith('fo602_cache_')).forEach(k => localStorage.removeItem(k));
+    localStorage.removeItem('fo602_lastuser');
+  }
+
   // ───────────────────────── Data loading (หลายวัน) ─────────────────────────
   // S.days[date] = {date, meta, order, dirty, draftOffer}; วันที่กำลังแสดงถูกคัดลอกไว้ใน S.meta/S.order/S.dirty/S.draftOffer
-  function setCrew(c) {
+  function setCrew(c, noCache) {
     S.crew = c || { people: [] };
     S.crewById = {};
     (S.crew.people || []).forEach(p => S.crewById[p.id] = p);
+    if (!noCache && c && !c.error) cacheBoot({ crew: c });
   }
   function dayFrom(r) {
     const d = { date: r.date, meta: r, order: null, dirty: false, draftOffer: null };
@@ -242,39 +292,173 @@
   function stash() { const d = S.days[S.date]; if (d) Object.assign(d, { meta: S.meta, order: S.order, dirty: S.dirty, draftOffer: S.draftOffer }); }
   function loadActive() { const d = S.days[S.date]; if (d) Object.assign(S, { meta: d.meta, order: d.order, dirty: d.dirty, draftOffer: d.draftOffer }); }
   function activate(date) { stash(); S.date = date; loadActive(); }
-  function putDay(r) { S.days[r.date] = dayFrom(r); if (r.date === S.date) loadActive(); }
-  function setRange(res) {
+  /** r = ข้อมูลจาก server */
+  function putDay(r) { cacheDays([r]); stash(); S.days[r.date] = dayFrom(r); if (r.date === S.date) loadActive(); }
+  function setRange(res, fromCache) {
+    if (!fromCache) cacheDays(res.days);
+    if (res.days.length) writeCache(c => { c.lastRange = { from: res.days[0].date, to: res.days[res.days.length - 1].date }; });
     S.days = {};
     S.range = res.days.map(x => x.date);
     res.days.forEach(r => S.days[r.date] = dayFrom(r));
     if (!S.range.includes(S.date)) S.date = S.range[0];
     loadActive();
   }
+  /** รวมข้อมูลใหม่จาก server เข้ากับที่แสดงอยู่ — ไม่ทับวันที่ผู้ใช้กำลังแก้ · คืน true ถ้ามีอะไรเปลี่ยน */
+  function mergeFresh(res) {
+    cacheDays(res.days);
+    stash();
+    let changed = false;
+    res.days.forEach(r => {
+      const cur = S.days[r.date]; if (!cur) return;
+      const sig = x => x ? [x.exists, x.hidden, x.status, x.version, x.revision].join('|') : '';
+      if (sig(cur.meta) === sig(r)) return;
+      changed = true;
+      if (!cur.dirty) S.days[r.date] = dayFrom(r);
+      else cur.staleWarn = (r.updatedBy || 'ผู้อื่น') + ' · ' + thaiTs(r.updatedAt);   // แก้อยู่ แต่มีคนบันทึกทับ → เตือน
+    });
+    loadActive();
+    return changed;
+  }
   function dayList() { stash(); return S.range.map(d => S.days[d]); }
   function anyDirty() { return dayList().some(d => d.dirty) || !!S.acEdit; }
   function statusOf(d) { return d.meta && d.meta.exists ? d.meta.status : 'NEW'; }
   function dayEditable(d) { return can('editOrder') && d.order && statusOf(d) !== 'RELEASED' && !(d.meta && d.meta.hidden); }
 
-  async function bootstrap(range) {
-    const r = await api('bootstrap', range || {});
+  function applyBoot(b) {
+    if (b.settings) S.settings = b.settings;
+    if (b.today) S.today = b.today;
+    if (b.aircraft) S.aircraft = b.aircraft;
+    if (b.crew) setCrew(b.crew, true);
+    if (b.holidays) setHolidays(b.holidays);
+  }
+  /** ช่วงที่เปิดเป็นค่าเริ่มต้น (ตรงกับ defaultRange_ ฝั่ง server ยกเว้นผู้บังคับบัญชาที่ server หาชุดรอพิจารณาให้) */
+  function defaultRangeLocal(c) {
+    const today = todayKey();
+    if (can('editOrder') || (S.user && S.user.role === 'documents')) return nextBatch(today);
+    if (S.user && S.user.role === 'commander' && c && c.lastRange) return c.lastRange;   // server จะหาชุดรอพิจารณาให้ตามหลัง
+    return { from: today, to: today };
+  }
+  function setRefreshing(on) {
+    S.refreshing = on;
+    const el = $('#syncPill'); if (el) el.outerHTML = syncPillHtml();
+  }
+  async function bootstrap(range, opts) {
+    opts = opts || {};
+    const r = await api('bootstrap', range || {}, opts.background ? { quiet: true, silent: true } : {});
+    const roleChanged = !S.user || S.user.role !== r.user.role || S.user.mustChange !== r.user.mustChange;
     S.user = r.user; S.settings = r.settings || S.settings;
     if (r.today) S.today = r.today;
     if (!r.user.mustChange) {
-      S.aircraft = r.aircraft; setCrew(r.crew); setHolidays(r.holidays);
-      setRange(r.range);
+      applyBoot({ aircraft: r.aircraft, holidays: r.holidays });
+      if (r.crew && !r.crew.error) setCrew(r.crew, true);
+      cacheBoot({ settings: r.settings, today: r.today, aircraft: r.aircraft, holidays: r.holidays, crew: r.crew && !r.crew.error ? r.crew : undefined });
       if (r.crew && r.crew.error) toast('โหลดรายชื่อนักบินไม่สำเร็จ: ' + r.crew.error, true);
+      if (opts.background && !roleChanged) {
+        // แสดงจาก cache อยู่แล้ว → รวมข้อมูลใหม่ ถ้าผู้ใช้ยังอยู่ช่วงเดิม
+        // ถ้า server ให้ช่วงอื่น (เช่น ชุดรอพิจารณาของผู้บังคับบัญชา) และผู้ใช้ยังไม่ได้กดไปไหน → สลับไปช่วงนั้น
+        const same = S.range.join(',') === r.range.days.map(d => d.date).join(',');
+        const untouched = (S.loadToken || 0) === opts.token && !anyDirty() && S.tab === 'order';
+        if (!same && untouched) { S.date = r.range.days[0].date; setRange(r.range); S.refreshing = false; renderView(); return; }
+        const changed = same ? mergeFresh(r.range) : (cacheDays(r.range.days), false);
+        S.refreshing = false;
+        if (changed && S.tab === 'order') renderView(); else setRefreshing(false);
+        return;
+      }
+      setRange(r.range);
     }
+    S.refreshing = false;
     render();
   }
   async function loadRange(from, to, keepDate) {
+    to = to || from;
     if (anyDirty()) toast('ร่างที่ยังไม่บันทึกถูกเก็บไว้ในเครื่องนี้');
-    const r = await api('getRange', { from, to: to || from });
+    const cached = cachedRange(from, to);
+    if (cached) {
+      // แสดงจาก cache ทันที แล้วอัปเดตจาก server ตามหลัง (ไม่บล็อกหน้าจอ)
+      if (keepDate) S.date = keepDate;
+      setRange(cached, true);
+      S.refreshing = true;
+      renderView();
+      const token = S.loadToken = (S.loadToken || 0) + 1;
+      try {
+        const r = await api('getRange', { from, to }, { quiet: true, silent: true });
+        if (token !== S.loadToken) { cacheDays(r.days); return; }      // ผู้ใช้เปลี่ยนวันไปแล้ว
+        const changed = mergeFresh(r);
+        S.refreshing = false;
+        if (changed) renderView(); else setRefreshing(false);
+      } catch (e) {
+        if (token === S.loadToken) setRefreshing(false);
+        if (e.code !== 'AUTH' && !e.handled) toast('ยังอัปเดตจากเซิร์ฟเวอร์ไม่ได้ — กำลังแสดงข้อมูลที่บันทึกไว้ในเครื่อง', true);
+      }
+      return;
+    }
+    S.loadToken = (S.loadToken || 0) + 1;
+    const r = await api('getRange', { from, to });
     if (keepDate) S.date = keepDate;
     setRange(r);
+    S.refreshing = false;
     renderView();
   }
   const reloadRange = () => loadRange(S.range[0], S.range[S.range.length - 1], S.date);
-  async function refreshAircraft() { S.aircraft = await api('getAircraft', {}, { quiet: true }); }
+  async function refreshAircraft() { S.aircraft = await api('getAircraft', {}, { quiet: true }); cacheBoot({ aircraft: S.aircraft }); }
+
+  // ───────────────────────── งานเขียนแบบไม่บล็อกหน้าจอ ─────────────────────────
+  // แสดงผลทันที → ส่งเบื้องหลัง → ยืนยันด้วยข้อมูลจาก server หรือย้อนกลับถ้าไม่สำเร็จ · ทำได้ครั้งละ 1 งาน
+  function syncPillHtml() {
+    if (S.sync && S.sync.busy) return `<span id="syncPill" class="sync-pill busy" role="status"><span class="dot"></span>${esc(S.sync.label)}…</span>`;
+    if (S.refreshing) return `<span id="syncPill" class="sync-pill" role="status"><span class="dot"></span>กำลังอัปเดตข้อมูลล่าสุด…</span>`;
+    return '<span id="syncPill" hidden></span>';
+  }
+  function writeBusy() {
+    if (S.sync && S.sync.busy) { toast('กำลัง' + S.sync.label + ' — กรุณารอสักครู่', true); return true; }
+    return false;
+  }
+  async function runWrite(o) {
+    if (writeBusy()) return false;
+    stash();
+    const dates = S.range.slice();
+    const snap = {};
+    dates.forEach(d => { const x = S.days[d]; snap[d] = { meta: x.meta, dirty: x.dirty }; });
+    S.sync = { busy: true, label: o.label };
+    if (o.optimistic) o.optimistic();
+    loadActive(); renderView();
+    try {
+      const r = await o.send();
+      S.sync = { busy: false };
+      if (o.done) o.done(r);
+      renderView();
+      if (o.okMsg) toast(o.okMsg);
+      return true;
+    } catch (e) {
+      S.sync = { busy: false };
+      stash();
+      dates.forEach(d => { const x = S.days[d]; if (x && snap[d]) { x.meta = snap[d].meta; if (snap[d].dirty) x.dirty = true; } });   // ย้อนกลับ
+      loadActive(); renderView();
+      if (o.fail) await o.fail(e); else conflictOr(e);
+      return false;
+    }
+  }
+  /** สถานะที่จะเห็นทันทีหลังกดอนุมัติ / ไม่อนุมัติ / ส่ง / release */
+  function optimisticStatus(items, status, extra) {
+    stash();
+    items.forEach(it => {
+      const d = S.days[it.date]; if (!d) return;
+      d.meta = Object.assign({}, d.meta, { status, _pending: true }, extra || {});
+    });
+  }
+  function applyServerDays(list) {
+    stash();
+    list.forEach(r => {
+      const cur = S.days[r.date];
+      if (!cur) { cacheDays([r]); return; }                       // ผู้ใช้ย้ายไปช่วงอื่นแล้ว
+      if (cur.dirty) {                                            // แก้ต่อระหว่างรอ → เก็บงานไว้ ใช้ version ใหม่
+        cacheDays([r]);
+        cur.meta = r;
+        try { localStorage.setItem(draftKey(r.date), JSON.stringify({ base: r.version, order: cur.order, at: Date.now() })); } catch (e) { /* ignore */ }
+      } else { clearDraft(r.date); putDay(r); }
+    });
+    loadActive();
+  }
 
   // ───────────────────────── Render root ─────────────────────────
   const app = () => $('#app');
@@ -357,9 +541,10 @@
   }
 
   async function logout() {
+    if (S.sync && S.sync.busy && !(await confirmBox('ออกจากระบบ', 'กำลัง' + esc(S.sync.label) + 'อยู่ ถ้าออกตอนนี้อาจไม่รู้ผลว่าสำเร็จหรือไม่ ต้องการออกจากระบบหรือไม่?', 'ออกจากระบบ', 'bad'))) return;
     if (anyDirty() && !(await confirmBox('ออกจากระบบ', 'มีการแก้ไขที่ยังไม่บันทึก ต้องการออกจากระบบหรือไม่? (ร่างจะถูกลบจากเครื่องนี้)', 'ออกจากระบบ', 'bad'))) return;
     try { await API.call('logout', {}); } catch (e) { /* ignore */ }
-    API.setToken(''); clearAllDrafts();
+    API.setToken(''); clearAllDrafts(); clearCache();
     Object.assign(S, { user: null, crew: { people: [] }, crewById: {}, meta: null, order: null, dirty: false, draftOffer: null, days: {}, range: [todayKey()], users: null, acEdit: null, stats: Object.assign(S.stats, { data: null }) });
     render();
   }
@@ -454,15 +639,16 @@
     }
 
     const actions = [];
+    const dis = S.sync && S.sync.busy ? ' disabled' : '';
     if (b.toSave.length || (can('editOrder') && b.days.some(dayEditable))) {
-      actions.push(`<button class="btn primary" data-act="save">💾 บันทึก${b.multi ? 'ทั้งชุด' : ''}</button>`);
+      actions.push(`<button class="btn primary" data-act="save"${dis}>💾 บันทึก${b.multi ? 'ทั้งชุด' : ''}</button>`);
     }
     if (b.printable.length) actions.push(`<button class="btn ghost" data-act="print-all">🖨️ พิมพ์ / PDF${b.multi ? ' (' + b.printable.length + ' วัน)' : ''}</button>`);
     actions.push('<span class="sep"></span>');
-    if (b.submittable) actions.push(`<button class="btn rel" data-act="submit">📨 ส่งขออนุมัติ${sfx}</button>`);
-    if (b.approvable) actions.push(`<button class="btn ok" data-act="approve">✔ อนุมัติ${sfx}</button>`);
-    if (b.deniable) actions.push(`<button class="btn bad" data-act="deny">✖ ไม่อนุมัติ${sfx}</button>`);
-    if (b.releasable) actions.push(`<button class="btn rel" data-act="release">🚀 Release${sfx}</button>`);
+    if (b.submittable) actions.push(`<button class="btn rel" data-act="submit"${dis}>📨 ส่งขออนุมัติ${sfx}</button>`);
+    if (b.approvable) actions.push(`<button class="btn ok" data-act="approve"${dis}>✔ อนุมัติ${sfx}</button>`);
+    if (b.deniable) actions.push(`<button class="btn bad" data-act="deny"${dis}>✖ ไม่อนุมัติ${sfx}</button>`);
+    if (b.releasable) actions.push(`<button class="btn rel" data-act="release"${dis}>🚀 Release${sfx}</button>`);
 
     const tabs = b.multi ? `<div class="day-tabs" role="tablist">${b.days.map(d => {
       const s = statusOf(d), hn = holidayName(d.date);
@@ -472,6 +658,10 @@
     }).join('')}</div>` : '';
 
     let banners = '';
+    const curDay = S.days[S.date];
+    if (curDay && curDay.staleWarn && S.dirty) {
+      banners += `<div class="banner warn"><b>ใบนี้ถูกบันทึกโดย ${esc(curDay.staleWarn)}</b> ระหว่างที่คุณกำลังแก้ไข — ถ้ากดบันทึก ระบบจะแจ้งว่าชนกัน (งานของคุณเก็บเป็นร่างในเครื่องไว้ให้)</div>`;
+    }
     if (S.draftOffer) {
       banners += `<div class="banner warn">พบร่างที่ยังไม่บันทึกในเครื่องนี้ (${esc(thaiTs(ymd(new Date(S.draftOffer.at)) + ' ' + new Date(S.draftOffer.at).toTimeString().slice(0, 5)))})
         ${S.draftOffer.stale ? '— <b>มีผู้อื่นบันทึกใบนี้หลังจากร่างของคุณ</b> ตรวจให้ดีก่อนกู้คืน' : ''}
@@ -503,7 +693,7 @@
           ${can('editOrder') ? `<button class="btn sm" data-act="next-batch" title="พรุ่งนี้จนถึงวันทำการถัดไป">📅 ชุดถัดไป</button>` : ''}
         </div>
         <div class="thai-date" style="margin-top:8px">${esc(rangeLabel())}</div>
-        <div class="row" style="margin-top:6px">${summary}</div>
+        <div class="row" style="margin-top:6px">${summary}${syncPillHtml()}</div>
         ${batchBanner}
         <div class="actions">${actions.join('')}</div>
         ${tabs}
@@ -830,6 +1020,7 @@
   // ───── Order actions ─────
   async function gotoDate(d) { await loadRange(d, d, d); }
   async function saveAll(quiet) {
+    if (writeBusy()) return false;
     const b = batchInfo();
     if (!b.toSave.length) { if (!quiet) toast('ไม่มีการเปลี่ยนแปลงที่ต้องบันทึก'); return true; }
     for (const d of b.toSave) {                // ผอ.เดินทาง / ผู้บังคับ บ. ที่ติ๊กไว้ ต้องกรอกครบ
@@ -845,24 +1036,26 @@
       }
       d.order.title = S.settings.unitTitle;     // หัวเรื่องคงที่ตามการตั้งค่า
     }
-    try {
-      const r = await api('saveBatch', {
-        days: b.toSave.map(d => ({ date: d.date, order: d.order, baseVersion: d.meta && d.meta.exists ? d.meta.version : 0 })),
-        batchDates: S.range,
-      }, { silent: true });
-      b.toSave.forEach(d => clearDraft(d.date));
-      r.days.forEach(putDay);
-      renderView();
-      if (!quiet) toast('บันทึกร่างแล้ว' + (b.multi ? ' ' + b.toSave.length + ' วัน' : '') + ' — กด "ส่งขออนุมัติ" เมื่อจัดทำเสร็จ');
-      return true;
-    } catch (e) {
-      if (e.code === 'CONFLICT' || e.code === 'LOCKED') {
-        const go = await modal({ title: 'มีผู้อื่นแก้ไขใบจัดบิน', body: `<p>${esc(e.message)}</p><p>ยังไม่มีวันใดถูกบันทึก ร่างของคุณถูกเก็บไว้ในเครื่องนี้ — โหลดใหม่แล้วกด "กู้คืนร่าง" ในแต่ละวันเพื่อเทียบได้</p>`,
-          foot: [{ label: 'ยกเลิก', cls: 'ghost', value: false }, { label: 'โหลดใหม่', cls: 'primary', value: true }] });
-        if (go) await reloadRange();
-      } else toast(e.message, true);
-      return false;
-    }
+    const payload = b.toSave.map(d => ({ date: d.date, order: clone(d.order), baseVersion: d.meta && d.meta.exists ? d.meta.version : 0 }));
+    const n = payload.length;
+    return runWrite({
+      label: 'บันทึก',
+      optimistic: () => payload.forEach(p => {
+        const x = S.days[p.date];
+        x.dirty = false;
+        x.meta = Object.assign({}, x.meta, { exists: true, status: 'DRAFT', _pending: true, updatedBy: S.user.displayName });
+      }),
+      send: () => api('saveBatch', { days: payload, batchDates: S.range.slice() }, { quiet: true, silent: true }),
+      done: r => applyServerDays(r.days),
+      okMsg: quiet ? '' : 'บันทึกร่างแล้ว' + (b.multi ? ' ' + n + ' วัน' : '') + ' — กด "ส่งขออนุมัติ" เมื่อจัดทำเสร็จ',
+      fail: async e => {
+        if (e.code === 'CONFLICT' || e.code === 'LOCKED') {
+          const go = await modal({ title: 'มีผู้อื่นแก้ไขใบจัดบิน', body: `<p>${esc(e.message)}</p><p>ยังไม่มีวันใดถูกบันทึก ร่างของคุณถูกเก็บไว้ในเครื่องนี้ — โหลดใหม่แล้วกด "กู้คืนร่าง" ในแต่ละวันเพื่อเทียบได้</p>`,
+            foot: [{ label: 'ยกเลิก', cls: 'ghost', value: false }, { label: 'โหลดใหม่', cls: 'primary', value: true }] });
+          if (go) await reloadRange();
+        } else if (!e.handled) toast('บันทึกไม่สำเร็จ: ' + e.message + ' (ข้อมูลยังอยู่ในหน้านี้ กดบันทึกใหม่ได้)', true);
+      },
+    });
   }
   /** สิ่งที่น่าจะยังไม่เสร็จ — แสดงเตือนก่อนส่งขออนุมัติ (ส่งต่อได้) */
   function incompleteList(days) {
@@ -885,7 +1078,17 @@
     return out;
   }
   function requireSaved() { if (batchInfo().dirty) { toast('กรุณาบันทึกการแก้ไขก่อน', true); return false; } return true; }
-  async function applyBatch(r, msg) { r.days.forEach(putDay); renderView(); toast(msg); }
+  const nowTs = () => ymd(new Date()) + ' ' + new Date().toTimeString().slice(0, 8);
+  /** ส่งคำสั่งเปลี่ยนสถานะทั้งชุดแบบไม่บล็อกหน้าจอ */
+  function batchWrite(label, action, params, items, status, extra, okMsg) {
+    return runWrite({
+      label,
+      optimistic: () => optimisticStatus(items, status, extra),
+      send: () => api(action, Object.assign({ items }, params), { quiet: true, silent: true }),
+      done: r => applyServerDays(r.days),
+      okMsg,
+    });
+  }
 
   const ACTIONS = {
     tab: async el => {
@@ -904,6 +1107,7 @@
     'day-tab': el => { activate(el.dataset.d); renderView(); },
     save: () => saveAll(),
     submit: async () => {
+      if (writeBusy()) return;
       if (batchInfo().dirty && !(await saveAll(true))) return;   // บันทึกก่อนส่ง
       const b = batchInfo();
       if (!b.submittable) { toast('ต้องบันทึกใบจัดบินให้ครบทุกวันก่อนส่งขออนุมัติ', true); return; }
@@ -914,8 +1118,7 @@
         <label class="field"><span>ข้อความถึงผู้บังคับบัญชา (ถ้ามี)</span><textarea id="sbNote" rows="2"></textarea></label>`,
         foot: [{ label: 'ยกเลิก', cls: 'ghost', value: null }, { label: '📨 ส่งขออนุมัติ', cls: 'rel', value: bg => $('#sbNote', bg).value }] });
       if (note == null) return;
-      try { await applyBatch(await api('submitBatch', { items, note }, { silent: true }), 'ส่งขออนุมัติแล้ว'); }
-      catch (e) { conflictOr(e); }
+      await batchWrite('ส่งขออนุมัติ', 'submitBatch', { note }, items, 'PENDING', null, 'ส่งขออนุมัติแล้ว');
     },
     blank: async () => {
       if (!(await confirmBox('ล้างเป็นหน้าว่าง', 'ล้างข้อมูลของ' + esc(thaiDate(S.date)) + 'ให้เป็นใบว่าง (ยังไม่บันทึกจนกว่าจะกด "บันทึก")', 'ล้างข้อมูล', 'bad'))) return;
@@ -949,35 +1152,33 @@
     'draft-restore': () => { S.order = normalizeOrder(S.draftOffer.order); S.draftOffer = null; markDirty(); renderView(); },
     'draft-discard': () => { S.draftOffer = null; clearDraft(); renderView(); },
     approve: async () => {
-      if (!requireSaved()) return;
+      if (writeBusy() || !requireSaved()) return;
       const b = batchInfo(), items = b.items(['PENDING', 'DENIED', 'APPROVED']);
       const note = await modal({ title: b.multi ? 'อนุมัติทั้งชุด' : 'อนุมัติใบจัดบิน', body: `<p>ยืนยันอนุมัติใบจัดบิน <b>${esc(rangeLabel())}</b></p>
         ${b.multi ? `<ul class="small">${b.days.map(d => `<li>${esc(dayShort(d.date))} — ${d.order && d.order.noMission ? 'ไม่มีภารกิจ' : (d.order ? d.order.missions.length + ' ภารกิจ' : '')} (${esc(STATUS_LABEL[statusOf(d)])})</li>`).join('')}</ul>` : ''}
         <label class="field"><span>หมายเหตุ (ถ้ามี)</span><textarea id="apNote" rows="2"></textarea></label>`,
         foot: [{ label: 'ยกเลิก', cls: 'ghost', value: null }, { label: '✔ อนุมัติ' + (b.multi ? 'ทั้งชุด' : ''), cls: 'ok', value: bg => $('#apNote', bg).value }] });
       if (note == null) return;
-      try { await applyBatch(await api('approveBatch', { items, note }, { silent: true }), 'อนุมัติแล้ว'); }
-      catch (e) { conflictOr(e); }
+      await batchWrite('อนุมัติ', 'approveBatch', { note }, items, 'APPROVED', { approvedBy: S.user.displayName, approvedAt: nowTs(), denyReason: '' }, 'อนุมัติแล้ว');
     },
     deny: async () => {
-      if (!requireSaved()) return;
+      if (writeBusy() || !requireSaved()) return;
       const b = batchInfo(), items = b.items(['PENDING', 'APPROVED', 'DENIED']);
       const reason = await modal({ title: b.multi ? 'ไม่อนุมัติทั้งชุด' : 'ไม่อนุมัติใบจัดบิน', body: `<p>${esc(rangeLabel())}</p>
         <label class="field"><span>เหตุผลที่ไม่อนุมัติ (จำเป็น)${b.multi ? ' — ระบุวันที่ต้องแก้ได้' : ''}</span><textarea id="dnR" rows="4" autofocus></textarea></label><div class="form-error" id="dnE"></div>`,
         foot: [{ label: 'ยกเลิก', cls: 'ghost', value: null }, { label: '✖ ไม่อนุมัติ', cls: 'bad', value: bg => $('#dnR', bg).value.trim(),
           validate: bg => { const ok = !!$('#dnR', bg).value.trim(); if (!ok) $('#dnE', bg).textContent = 'กรุณาระบุเหตุผล'; return ok; } }] });
       if (!reason) return;
-      try { await applyBatch(await api('denyBatch', { items, reason }, { silent: true }), 'บันทึกผลไม่อนุมัติแล้ว'); }
-      catch (e) { conflictOr(e); }
+      await batchWrite('บันทึกผลไม่อนุมัติ', 'denyBatch', { reason }, items, 'DENIED', { approvedBy: S.user.displayName, approvedAt: nowTs(), denyReason: reason }, 'บันทึกผลไม่อนุมัติแล้ว');
     },
     release: async () => {
-      if (!requireSaved()) return;
+      if (writeBusy() || !requireSaved()) return;
       const b = batchInfo();
       if (!(await confirmBox(b.multi ? 'Release ทั้งชุด' : 'Release ใบจัดบิน', 'Release ใบจัดบิน <b>' + esc(rangeLabel()) + '</b> — ใบจัดบินจะถูกล็อกและผู้ชมทุกคนจะเห็นได้ สถานภาพเครื่องบินจะถูกบันทึก ณ เวลานี้', '🚀 Release', 'rel'))) return;
-      try { await applyBatch(await api('releaseBatch', { items: b.items(['APPROVED']) }, { silent: true }), 'Release แล้ว'); }
-      catch (e) { conflictOr(e); }
+      await batchWrite('Release', 'releaseBatch', {}, b.items(['APPROVED']), 'RELEASED', { releasedBy: S.user.displayName, releasedAt: nowTs() }, 'Release แล้ว');
     },
     revise: async () => {
+      if (writeBusy()) return;
       const reason = await modal({ title: 'เปิดแก้ไข' + thaiDate(S.date), body: `<p>ใบจัดบินวันนี้จะกลับเป็น <b>ร่าง</b> ในฉบับแก้ไขที่ ${S.meta.revision + 1} และต้องได้รับอนุมัติใหม่ก่อน release (วันอื่นในชุดไม่ได้รับผลกระทบ)</p>
         <label class="field"><span>เหตุผลที่ต้องแก้ไข (จำเป็น)</span><textarea id="rvR" rows="3" autofocus></textarea></label><div class="form-error" id="rvE"></div>`,
         foot: [{ label: 'ยกเลิก', cls: 'ghost', value: null }, { label: 'เปิดแก้ไข', cls: 'primary', value: bg => $('#rvR', bg).value.trim(),
@@ -986,6 +1187,7 @@
       putDay(await api('reviseOrder', { date: S.date, reason })); renderView();
     },
     delete: async () => {
+      if (writeBusy()) return;
       if (!(await confirmBox('ลบใบจัดบิน', 'ลบใบจัดบิน' + esc(thaiDate(S.date)) + ' ออกจากฐานข้อมูลถาวร?', 'ลบถาวร', 'bad'))) return;
       await api('deleteOrder', { date: S.date }); clearDraft();
       putDay(await api('getOrder', { date: S.date })); renderView(); toast('ลบแล้ว');
@@ -1044,7 +1246,7 @@
   };
   async function conflictOr(e) {
     if (e.code === 'CONFLICT' || e.code === 'NOT_FOUND' || e.code === 'BAD_STATE') { toast(e.message, true); await reloadRange(); }
-    else toast(e.message, true);
+    else if (!e.handled) toast(e.message, true);
   }
 
   // ───────────────────────── Aircraft tab ─────────────────────────
@@ -1096,6 +1298,7 @@
       const list = S.acEdit.filter(a => a.tail.trim() || a.type.trim() || a.detail.trim());
       try {
         S.aircraft = await api('saveAircraft', { aircraft: list, baseVersion: S.aircraft.version }, { silent: true });
+        cacheBoot({ aircraft: S.aircraft });
         S.acEdit = null; renderView(); toast('บันทึกสถานภาพเครื่องบินแล้ว');
       } catch (e) {
         if (e.code === 'CONFLICT') { toast(e.message, true); await refreshAircraft(); }
@@ -1379,6 +1582,7 @@
     'hol-save': async () => {
       const list = holEdit.list.filter(h => h.date);
       setHolidays(await api('saveHolidays', { year: String(holEdit.year), holidays: list }));
+      cacheBoot({ holidays: S.holidays });
       drawHolidays(holEdit.year); toast('บันทึกวันหยุดแล้ว');
     },
   });
@@ -1462,11 +1666,25 @@
   document.addEventListener('focusin', e => {   // อัปเดตรายชื่อ น.เอกสาร ในตัวเลือก น.ควบคุมการถ่าย ชพ.
     if (e.target.matches && e.target.matches('select[data-refuel]') && S.order) e.target.innerHTML = refuelOptions();
   });
-  window.addEventListener('beforeunload', e => { if (S.user && anyDirty()) { e.preventDefault(); e.returnValue = ''; } });
+  window.addEventListener('beforeunload', e => { if (S.user && (anyDirty() || (S.sync && S.sync.busy))) { e.preventDefault(); e.returnValue = ''; } });
 
   // ───────────────────────── Start ─────────────────────────
   async function start() {
     if (API.token) {
+      // เปิดจาก cache ทันที แล้วอัปเดตจาก server เบื้องหลัง
+      const c = readCache(localStorage.getItem('fo602_lastuser'));
+      if (c && c.user && c.boot && !c.user.mustChange) {
+        S.user = c.user; applyBoot(c.boot);
+        const rg = defaultRangeLocal(c), cached = cachedRange(rg.from, rg.to);
+        if (cached) {
+          S.date = rg.from; setRange(cached, true); S.refreshing = true; render();
+          bootstrap(S.user.role === 'commander' ? {} : rg, { background: true, token: S.loadToken || 0 }).catch(e => {
+            setRefreshing(false);
+            if (e.code !== 'AUTH') toast('ยังเชื่อมต่อเซิร์ฟเวอร์ไม่ได้ — กำลังแสดงข้อมูลที่บันทึกไว้ในเครื่อง', true);
+          });
+          return;
+        }
+      }
       try { await bootstrap(); return; } catch (e) { /* token หมดอายุ */ }
     }
     S.user = null; render();
@@ -1487,6 +1705,6 @@
       setInterval(check, 30 * 60 * 1000);
     }).catch(() => {});
   }
-  window.__fo602 = { S, ACTIONS, nextBatch, setHolidays, loadRange };   // สำหรับ debug/ทดสอบ
+  window.__fo602 = { S, ACTIONS, nextBatch, setHolidays, loadRange, readCache };   // สำหรับ debug/ทดสอบ
   start();
 })();
