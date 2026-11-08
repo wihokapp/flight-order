@@ -161,6 +161,11 @@ select.mini { border: 0; background: none; padding: 0; min-height: 0; font-size:
 .mission-head .x { background: #ffffff22; color: #fff; border: 0; width: 36px; height: 36px; border-radius: 8px; cursor: pointer;
   font-size: 18px; flex: none; }
 .mission-head .x:hover { background: #c0392b; }
+.mission-head .mv { background: #ffffff22; color: #fff; border: 0; width: 36px; height: 36px; border-radius: 8px; cursor: pointer;
+  font-size: 17px; font-weight: 700; flex: none; }
+.mission-head .mv:hover:not(:disabled) { background: #ffffff44; }
+.mission-head .mv:disabled { opacity: .3; cursor: default; }
+.mission.moved { box-shadow: 0 0 0 3px #9fbfe8; transition: box-shadow .3s; }
 .mission-body { padding: 12px; display: grid; gap: 10px; }
 .subhead { font-size: 13px; font-weight: 800; color: var(--navy); text-transform: none; border-bottom: 1px solid var(--blue);
   padding-bottom: 4px; margin-top: 4px; }
@@ -296,6 +301,9 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 14px; }
   :root { --tabbar-h: 64px; }
   .user-btn .name, .user-btn .role { display: none; }
   .user-btn { padding: 5px; }
+  .mission-head { flex-wrap: wrap; }
+  .mission-head .num { flex: 1; }
+  .mission-head select { order: 5; flex-basis: 100%; }
   .crew-row { grid-template-columns: 22px minmax(0, 1fr) 36px; grid-template-areas: "n nm rm" "n role role"; row-gap: 4px; }
   .crew-row .n { grid-area: n; align-self: start; padding-top: 6px; }
   .crew-row .nm { grid-area: nm; white-space: normal; }
