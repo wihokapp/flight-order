@@ -10,14 +10,15 @@
     approve: ['admin', 'commander'], seeUnreleased: ['admin', 'scheduler', 'commander', 'documents'],
     manageUsers: ['admin'], settings: ['admin'], deleteOrder: ['admin'],
   };
-  const DUTY_FIELDS = [
-    ['wingDuty', 'น.เวรกองบิน 6'], ['controller', 'น.เวร Controller'], ['scheduler', 'น.จัดบิน'],
-    ['documents', 'น.ดูแลเอกสาร'], ['refuel', 'น.ควบคุมการถ่าย ชพ.'], ['contact', 'น.จัดบิน (ติดต่อ)'],
-  ];
+  const DUTY_SINGLE = [['wingDuty', 'น.เวรกองบิน 6'], ['wingDutyAsst', 'ผช.น.เวร กองบิน 6'], ['controller', 'น.เวร Controller']];
+  const DUTY_MULTI = { schedulers: ['น.จัดบิน', 2], documents: ['น.เอกสาร', 3] };
+  // นบ.STBY: [key, ชื่อ, จำนวนคน, แบบสำหรับแสดงคุณสมบัติ] — ต้องตรงกับ STBY_TYPES ใน Code.gs
+  const STBY_TYPES = [['royal320', 'STBY A319/ACJ320 นบ.ราชฯ', 3, 'A319/320'], ['a320', 'STBY A319/ACJ320', 2, 'A319/320'],
+    ['a340', 'STBY A340', 2, 'A340'], ['ssj', 'STBY SSJ100', 2, 'SSJ']];
   // หน้าที่นักบิน (ลำดับตามที่ใช้ในฝูง) — แก้รายการได้ที่นี่
   const PILOT_ROLES = ['นบ.1 ราช', 'นบ.2 ราช', 'นบ.1', 'นบ.2', 'คบ.', 'ฝคบ.', 'ฝฟ.', 'ฝนบ.1', 'ฝพ.', 'ฝป.', 'ฝป(พ.)', 'ฝรน.1', 'ฝรน.2', 'OBS'];
-  const MISSION_TYPES = ['ภารกิจ', 'ฝึก', 'ทดสอบ', 'ตรวจสอบ', 'ขนส่ง', 'ซ้อม'];
-  const DRESS = ['ชุดบิน', 'ชุดปฏิบัติงาน', 'ชุดปกติขาว', 'ชุดปกติกากี'];
+  const MISSION_TYPES = ['ภารกิจ', 'ฝึกบิน'];
+  const DRESS = ['ชุดบิน', 'ชุดแขนยาวบ่าอ่อน'];
   const AC_STATUS = ['FMC', 'PMC', 'NMCM', 'NMCS', 'NMCB', 'NMC'];
   const DAYS = ['อาทิตย์', 'จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์'];
   const MONTHS = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
@@ -66,24 +67,46 @@
   }
   function aircraftLabel(a) { return [a.type, a.designation].filter(Boolean).join(' ') + (a.tail ? ' (' + a.tail + ')' : ''); }
 
+  function blankP() { return { id: '', name: '', phone: '' }; }
+  function blankVip() { return { on: false, name: '', position: '', phone: '' }; }
+  function blankStandby() { const s = {}; STBY_TYPES.forEach(([k, , n]) => s[k] = { on: false, pilots: Array.from({ length: n }, blankP) }); return s; }
   function blankMission() {
-    return { id: rid(), aircraftTail: '', aircraftLabel: '', aircraftType: '', type: 'ภารกิจ', title: '', callsign: '', route: '', fuel: '',
-      times: { brief: '', tow: '', takeoff: '' }, pax: '', parking: { out: '', ret: '' }, crew: [], poc: '', dress: '', notes: '' };
+    return { id: rid(), aircraftTail: '', aircraftLabel: '', aircraftType: '', acRole: '', pairTail: '', pairLabel: '',
+      type: 'ภารกิจ', title: '', callsign: '', route: '', fuel: '',
+      times: { brief: '', tow: '', takeoff: '', towMode: 'tow' }, pax: '', parking: { out: '', ret: '' },
+      director: blankVip(), acCommander: blankVip(), crew: [], poc: '', dress: '', notes: '' };
   }
   function blankOrder() {
-    const duty = {}; DUTY_FIELDS.forEach(([k]) => duty[k] = { id: '', name: '', phone: '' });
-    return { title: S.settings.unitTitle, duty, noMission: false, missions: [blankMission()], remarks: '' };
+    return { title: S.settings.unitTitle,
+      duty: { wingDuty: blankP(), wingDutyAsst: blankP(), controller: blankP(), schedulers: [blankP()], documents: [blankP()], refuelIdx: -1, contact: blankP() },
+      standby: blankStandby(), noMission: false, missions: [blankMission()], remarks: '' };
   }
-  function normalizeOrder(o) {
-    const b = blankOrder();
-    o = Object.assign(b, clone(o || {}));
-    DUTY_FIELDS.forEach(([k]) => o.duty[k] = Object.assign({ id: '', name: '', phone: '' }, o.duty[k] || {}));
-    o.missions = (o.missions || []).map(m => Object.assign(blankMission(), m, {
-      times: Object.assign({ brief: '', tow: '', takeoff: '' }, m.times), parking: Object.assign({ out: '', ret: '' }, m.parking),
+  /** แปลงข้อมูลเก่า/ใหม่ให้เป็นโครงสร้างปัจจุบันเสมอ */
+  function normalizeOrder(src) {
+    const o = clone(src || {}), d = o.duty || {};
+    const pp = x => Object.assign(blankP(), x || {});
+    const lst = (v, max) => { const a = (Array.isArray(v) ? v : (v && (v.name || v.id) ? [v] : [])).slice(0, max).map(pp); return a.length ? a : [blankP()]; };
+    const ri = Number(d.refuelIdx);
+    const duty = { wingDuty: pp(d.wingDuty), wingDutyAsst: pp(d.wingDutyAsst), controller: pp(d.controller),
+      schedulers: lst(d.schedulers || d.scheduler, 2), documents: lst(d.documents, 3), refuelIdx: Number.isInteger(ri) ? ri : -1, contact: pp(d.contact) };
+    const standby = blankStandby();
+    Object.keys(standby).forEach(k => {
+      const x = (o.standby || {})[k];
+      if (x) { standby[k].on = !!x.on; (x.pilots || []).forEach((p, i) => { if (i < standby[k].pilots.length) standby[k].pilots[i] = pp(p); }); }
+    });
+    const missions = (o.missions || []).map(m => Object.assign(blankMission(), m, {
+      times: Object.assign({ brief: '', tow: '', takeoff: '', towMode: 'tow' }, m.times), parking: Object.assign({ out: '', ret: '' }, m.parking),
+      director: Object.assign(blankVip(), m.director), acCommander: Object.assign(blankVip(), m.acCommander),
+      fuel: String(m.fuel || '').replace(/[^\d.]/g, ''),
       crew: (m.crew || []).map(c => Object.assign({ id: '', name: '', dept: '', role: '' }, c)),
     }));
-    if (!o.noMission && !o.missions.length) o.missions = [blankMission()];
-    return o;
+    const out = Object.assign(blankOrder(), o, { duty, standby, missions });
+    if (!out.noMission && !out.missions.length) out.missions = [blankMission()];
+    return out;
+  }
+  function fmtFuel(f) { const n = Number(f); return f === '' || isNaN(n) ? String(f) : (Number.isInteger(n) ? n.toFixed(1) : String(f)); }
+  function optionsHtml(list, cur) {
+    return list.concat(cur && !list.includes(cur) ? [cur] : []).map(v => `<option ${v === cur ? 'selected' : ''}>${esc(v)}</option>`).join('');
   }
   function comparable(o) {
     o = clone(o || {}); delete o.aircraftSnapshot; delete o.schema; delete o.date;
@@ -485,33 +508,56 @@
   }
 
   // ───── Editor ─────
-  function personField(path, label, p, withPhone) {
+  function personField(path, label, p, opts) {
+    opts = opts || {};
     return `<div class="field"><span>${esc(label)}</span>
       <div class="person"><input class="input" data-bind="${path}.name" value="${esc(p.name)}" placeholder="พิมพ์หรือเลือกจากรายชื่อ">
-      <button class="btn icon ghost" data-act="pick-duty" data-path="${path}" aria-label="เลือก${esc(label)}จากรายชื่อ">👤</button></div>
-      ${withPhone ? `<input class="input" style="margin-top:4px" data-bind="${path}.phone" value="${esc(p.phone)}" placeholder="เบอร์ติดต่อ" inputmode="tel">` : ''}</div>`;
+      <button class="btn icon ghost" data-act="pick-duty" data-path="${path}" ${opts.tk ? `data-tk="${esc(opts.tk)}"` : ''} aria-label="เลือก${esc(label)}จากรายชื่อ">👤</button>
+      ${opts.rm ? `<button class="btn icon danger-ghost" data-act="person-rm" data-list="${opts.rm[0]}" data-i="${opts.rm[1]}" aria-label="ลบ${esc(label)}">✕</button>` : ''}</div>
+      ${opts.phone ? `<input class="input" style="margin-top:4px" data-bind="${path}.phone" value="${esc(p.phone)}" placeholder="เบอร์ติดต่อ" inputmode="tel">` : ''}</div>`;
+  }
+  function multiField(key) {
+    const [label, max] = DUTY_MULTI[key], list = S.order.duty[key];
+    return `<div class="multi"><div class="multi-head"><b>${esc(label)}</b> <span class="muted small">(สูงสุด ${max} คน)</span></div>
+      ${list.map((p, i) => personField(`duty.${key}.${i}`, label + ' คนที่ ' + (i + 1), p, { rm: list.length > 1 ? [`duty.${key}`, i] : null })).join('')}
+      ${list.length < max ? `<button class="btn sm ghost" data-act="person-add" data-list="duty.${key}" data-max="${max}">＋ เพิ่ม${esc(label)}</button>` : ''}</div>`;
+  }
+  function refuelOptions() {
+    const ri = Number(S.order.duty.refuelIdx);
+    return `<option value="-1">— ไม่มีในวันนี้ —</option>` + S.order.duty.documents.map((p, i) => p.name ? `<option value="${i}" ${ri === i ? 'selected' : ''}>${esc(p.name)}</option>` : '').join('');
   }
   function inp(path, label, val, attrs, cls) {
     return `<label class="field ${cls || ''}"><span>${esc(label)}</span><input data-bind="${path}" value="${esc(val)}" ${attrs || ''}></label>`;
+  }
+  function vipBlock(i, key, label, v) {
+    const miss = f => v.on && !String(v[f]).trim() ? 'missing' : '';
+    return `<div class="vip ${v.on ? 'on' : ''}"><label class="row"><input type="checkbox" data-bool="missions.${i}.${key}.on" ${v.on ? 'checked' : ''}> มี ${esc(label)}</label>
+      ${v.on ? `<div class="grid g3" style="margin-top:6px">
+        ${inp(`missions.${i}.${key}.name`, 'ชื่อ *', v.name, '', miss('name'))}
+        ${inp(`missions.${i}.${key}.position`, 'ตำแหน่ง *', v.position, '', miss('position'))}
+        ${inp(`missions.${i}.${key}.phone`, 'เบอร์โทร. *', v.phone, 'inputmode="tel"', miss('phone'))}</div>` : ''}</div>`;
   }
   function dupMap() {
     const map = {};
     (S.order.missions || []).forEach((m, i) => m.crew.forEach(c => { if (c.id) (map[c.id] = map[c.id] || []).push(i + 1); }));
     return map;
   }
+  function acSummaryHtml(list) {
+    return list.length ? `<div class="tbl-wrap"><table class="tbl cards"><thead><tr><th>เครื่อง / แบบ</th><th>สถานะ</th><th>ข้อขัดข้อง / รายละเอียด</th><th>Plan Check</th></tr></thead><tbody>
+      ${list.map(a => `<tr><td data-k="เครื่อง">${esc(a.tail)} / ${esc(a.type)}</td><td data-k="สถานะ"><span class="ac-status ${esc(a.status)}">${esc(a.status)}</span></td>
+        <td data-k="รายละเอียด">${esc(a.detail)}</td><td data-k="Plan Check">${esc(a.planCheck)}</td></tr>`).join('')}</tbody></table></div>`
+      : '<p class="muted">ยังไม่มีข้อมูลเครื่องบิน</p>';
+  }
   function editorHtml() {
     const o = S.order, dups = dupMap();
     const acList = S.aircraft.list || [];
-    const datalists = `<datalist id="mtypes">${MISSION_TYPES.map(t => `<option value="${esc(t)}">`).join('')}</datalist>` +
-      `<datalist id="dress">${DRESS.map(t => `<option value="${esc(t)}">`).join('')}</datalist>`;
-    const acSummary = acList.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>เครื่อง / แบบ</th><th>สถานะ</th><th>ข้อขัดข้อง / รายละเอียด</th></tr></thead><tbody>
-      ${acList.map(a => `<tr><td>${esc(a.tail)} / ${esc(a.type)}</td><td><span class="ac-status ${esc(a.status)}">${esc(a.status)}</span></td><td>${esc(a.detail)}</td></tr>`).join('')}</tbody></table></div>`
-      : '<p class="muted">ยังไม่มีข้อมูลเครื่องบิน</p>';
 
     const missions = o.missions.map((m, i) => {
       const tk = typeKey(m.aircraftType);
       const acOpts = acList.slice();
       if (m.aircraftTail && !acOpts.some(a => a.tail === m.aircraftTail)) acOpts.push({ tail: m.aircraftTail, type: m.aircraftType, designation: '', status: '' });
+      const pairOpts = acList.filter(a => a.tail !== m.aircraftTail);
+      if (m.pairTail && !pairOpts.some(a => a.tail === m.pairTail)) pairOpts.push({ tail: m.pairTail, type: '', designation: m.pairLabel, status: '' });
       const crew = m.crew.map((c, j) => {
         const p = S.crewById[c.id];
         const otherMissions = (dups[c.id] || []).filter(n => n !== i + 1);
@@ -519,7 +565,7 @@
         return `<div class="crew-row">
           <span class="n">${j + 1}.</span>
           <select class="role" data-bind="missions.${i}.crew.${j}.role" aria-label="หน้าที่ของ ${esc(c.name)}">
-            <option value="">— หน้าที่ —</option>${PILOT_ROLES.concat(c.role && !PILOT_ROLES.includes(c.role) ? [c.role] : []).map(r => `<option ${r === c.role ? 'selected' : ''}>${esc(r)}</option>`).join('')}
+            <option value="">— หน้าที่ —</option>${optionsHtml(PILOT_ROLES, c.role)}
           </select>
           <span class="nm">${esc(c.name)}<small>${p ? esc([p.rank, p.first, p.last].join(' ').trim()) : ''}</small></span>
           <span class="flags row" style="gap:4px">
@@ -540,45 +586,70 @@
         </div>
         <div class="mission-body">
           <div class="grid g4 keep2">
-            ${inp(`missions.${i}.type`, 'ประเภท', m.type, 'list="mtypes"')}
+            <label class="field"><span>ประเภท</span><select data-bind="missions.${i}.type">${optionsHtml(MISSION_TYPES, m.type)}</select></label>
             ${inp(`missions.${i}.callsign`, 'Callsign', m.callsign, 'autocapitalize="characters"')}
-            ${inp(`missions.${i}.fuel`, 'เชื้อเพลิง', m.fuel, 'placeholder="เช่น 9.0 TONS"')}
+            <label class="field"><span>เชื้อเพลิง</span><span class="suffix"><input type="number" inputmode="decimal" step="0.1" min="0" data-bind="missions.${i}.fuel" value="${esc(m.fuel)}" placeholder="9.0"><em>TONS</em></span></label>
             ${inp(`missions.${i}.pax`, 'ผู้โดยสาร', m.pax, 'placeholder="เช่น 15/-"')}
+          </div>
+          <div class="grid g2">
+            <label class="field"><span>บ.จริง / บ.สำรอง</span><select data-bind="missions.${i}.acRole" data-rerender>
+              <option value="" ${!m.acRole ? 'selected' : ''}>— ไม่ระบุ —</option>
+              <option value="primary" ${m.acRole === 'primary' ? 'selected' : ''}>ภารกิจนี้เป็น บ.จริง</option>
+              <option value="spare" ${m.acRole === 'spare' ? 'selected' : ''}>ภารกิจนี้เป็น บ.สำรอง</option></select></label>
+            ${m.acRole ? `<label class="field"><span>${m.acRole === 'primary' ? 'บ.สำรอง คือเครื่อง' : 'เป็น บ.สำรองของ บ.จริง เครื่อง'}</span>
+              <select data-act-change="pair" data-m="${i}"><option value="">— เลือกเครื่อง —</option>
+              ${pairOpts.map(a => `<option value="${esc(a.tail)}" ${a.tail === m.pairTail ? 'selected' : ''}>${esc(aircraftLabel(a))}</option>`).join('')}</select></label>` : '<span></span>'}
           </div>
           <label class="field"><span>ภารกิจ</span><textarea data-bind="missions.${i}.title" rows="2">${esc(m.title)}</textarea></label>
           ${inp(`missions.${i}.route`, 'เส้นทางบิน', m.route, 'placeholder="เช่น บน.6 – บน.23 – บน.6"')}
           <div class="grid g3 keep2">
             ${inp(`missions.${i}.times.brief`, 'เวลา Brief', m.times.brief, 'inputmode="numeric" placeholder="0640" maxlength="5" data-time')}
-            ${inp(`missions.${i}.times.tow`, 'เวลาลาก', m.times.tow, 'inputmode="numeric" placeholder="0650" maxlength="5" data-time')}
+            <div class="field"><select class="mini" data-bind="missions.${i}.times.towMode" aria-label="เลือกเวลาลากหรือ TAXI">
+                <option value="tow" ${m.times.towMode !== 'taxi' ? 'selected' : ''}>เวลาลาก</option><option value="taxi" ${m.times.towMode === 'taxi' ? 'selected' : ''}>เวลา TAXI</option></select>
+              <input data-bind="missions.${i}.times.tow" value="${esc(m.times.tow)}" inputmode="numeric" placeholder="0650" maxlength="5" data-time aria-label="เวลาลาก หรือ TAXI"></div>
             ${inp(`missions.${i}.times.takeoff`, 'เวลาวิ่งขึ้น', m.times.takeoff, 'inputmode="numeric" placeholder="0730" maxlength="5" data-time')}
           </div>
           <div class="grid g2">
             ${inp(`missions.${i}.parking.out`, 'จุดจอดขาไป', m.parking.out)}
             ${inp(`missions.${i}.parking.ret`, 'จุดจอดขากลับ', m.parking.ret)}
           </div>
+          <div class="grid g2">${vipBlock(i, 'director', 'ผอ.เดินทาง', m.director)}${vipBlock(i, 'acCommander', 'ผู้บังคับ บ.', m.acCommander)}</div>
           <div class="subhead">นักบิน (${m.crew.length})</div>
           <div class="crew-list">${crew || '<div class="muted small">ยังไม่มีนักบิน</div>'}</div>
           <div><button class="btn sm" data-act="pick-crew" data-m="${i}">＋ เพิ่มนักบิน</button></div>
           <div class="grid g2">
             ${inp(`missions.${i}.poc`, 'POC', m.poc)}
-            ${inp(`missions.${i}.dress`, 'การแต่งกาย', m.dress, 'list="dress"')}
+            <label class="field"><span>การแต่งกาย</span><select data-bind="missions.${i}.dress"><option value="">— เลือก —</option>${optionsHtml(DRESS, m.dress)}</select></label>
           </div>
           <label class="field"><span>หมายเหตุภารกิจ</span><textarea data-bind="missions.${i}.notes" rows="3">${esc(m.notes)}</textarea></label>
         </div>
       </article>`;
     }).join('');
 
-    return `${datalists}
+    const stby = STBY_TYPES.map(([k, label, n, tk]) => {
+      const x = o.standby[k];
+      return `<div class="stby ${x.on ? 'on' : ''}"><label class="row stby-head"><input type="checkbox" data-bool="standby.${k}.on" ${x.on ? 'checked' : ''}>
+        <b>${esc(label)}</b> <span class="muted small">(${n} คน)</span></label>
+        ${x.on ? `<div class="grid g3" style="margin-top:6px">${x.pilots.map((p, j) => personField(`standby.${k}.pilots.${j}`, 'คนที่ ' + (j + 1), p, { tk })).join('')}</div>` : ''}</div>`;
+    }).join('');
+
+    return `
       <section class="card">
-        <div class="card-head"><h2>ข้อมูลทั่วไป</h2></div>
-        <div class="grid">
-          ${inp('title', 'หัวเรื่อง', o.title)}
-          <div class="grid g3">${DUTY_FIELDS.map(([k, l]) => personField('duty.' + k, l, o.duty[k], k === 'contact')).join('')}</div>
+        <div class="card-head"><h2>ข้อมูลเวรและผู้รับผิดชอบ</h2></div>
+        <div class="grid g3">${DUTY_SINGLE.map(([k, l]) => personField('duty.' + k, l, o.duty[k])).join('')}</div>
+        <div class="grid g2" style="margin-top:12px">${multiField('schedulers')}${multiField('documents')}</div>
+        <div class="grid g2" style="margin-top:12px">
+          <label class="field"><span>น.ควบคุมการถ่าย ชพ. (เลือกจาก น.เอกสาร)</span><select data-bind="duty.refuelIdx" data-refuel>${refuelOptions()}</select></label>
+          ${personField('duty.contact', 'น.จัดบิน (ติดต่อ)', o.duty.contact, { phone: true })}
         </div>
       </section>
       <section class="card">
+        <div class="card-head"><h2>นบ.STBY</h2><span class="muted small">ติ๊กเฉพาะประเภทที่มี — ที่ไม่ติ๊กจะไม่แสดงในใบจัดบิน</span></div>
+        ${stby}
+      </section>
+      <section class="card">
         <div class="card-head"><h2>สถานภาพเครื่องบิน</h2><span class="spacer"></span><button class="btn sm ghost" data-act="tab" data-tab="aircraft">แก้ไขในแท็บสถานภาพ →</button></div>
-        ${acSummary}
+        ${acSummaryHtml(acList)}
       </section>
       <section class="card">
         <div class="card-head"><h2>รายละเอียดภารกิจ</h2><span class="spacer"></span><span class="chip">${o.missions.length} ภารกิจ</span></div>
@@ -596,7 +667,7 @@
   function openPicker(opts) {
     const st = { q: '', inactive: false };
     const mission = opts.m != null ? S.order.missions[opts.m] : null;
-    const tk = mission ? typeKey(mission.aircraftType) : '';
+    const tk = mission ? typeKey(mission.aircraftType) : (opts.tk || '');
     const title = mission ? `เพิ่มนักบิน — ภารกิจที่ ${opts.m + 1}` : 'เลือกรายชื่อ';
     const body = `
       <input class="input" id="pkQ" placeholder="ค้นหา ยศ ชื่อ นามสกุล หรือรหัส" autocomplete="off" autofocus>
@@ -652,32 +723,43 @@
     const o = day.order, m = day.meta || {}, st = statusOf(day);
     const ac = (st === 'RELEASED' && o.aircraftSnapshot) ? o.aircraftSnapshot : (S.aircraft.list || []);
     const d = o.duty;
-    const dutyCell = k => esc(d[k].name || '—') + (k === 'contact' && d[k].phone ? ' | ' + esc(d[k].phone) : '');
+    const nm = p => (p && p.name ? esc(p.name) : '—');
+    const names = arr => (arr || []).filter(p => p.name).map(p => esc(p.name)).join(', ') || '—';
+    const ri = Number(d.refuelIdx);
+    const refuel = ri >= 0 && d.documents[ri] && d.documents[ri].name ? esc(d.documents[ri].name) : '—';
     const stamp = st === 'RELEASED' ? 'RELEASED · Rev.' + m.revision : st === 'APPROVED' ? 'อนุมัติแล้ว · ยังไม่ release' : st === 'DENIED' ? 'ไม่อนุมัติ' : 'ร่าง · รอพิจารณา';
     const row = (l, v, raw) => (v == null || v === '' ? '' : `<tr><td class="l">${esc(l)}</td><td class="${raw ? 'pre' : ''}">${raw ? esc(v) : v}</td></tr>`);
+    const vip = v => (v && v.on ? `${esc(v.name)}${v.position ? ' · ' + esc(v.position) : ''}${v.phone ? ' · โทร. ' + esc(v.phone) : ''}` : '');
+    const stbyOn = STBY_TYPES.filter(([k]) => o.standby[k] && o.standby[k].on);
     const missions = o.noMission ? '<div class="d-none">— ไม่มีภารกิจ —</div>' : o.missions.map((x, i) => {
       const crew = x.crew.map((c, n) => `<div>${n + 1}. ${c.role ? '<b>' + esc(c.role) + '</b> ' : ''}${esc(c.name)}</div>`).join('');
       const t = x.times;
-      const times = [['Brief', t.brief], ['ลาก', t.tow], ['วิ่งขึ้น', t.takeoff]].filter(a => a[1]).map(a => esc(a[0]) + ' <b>' + esc(a[1]) + '</b>').join(' &nbsp;·&nbsp; ');
+      const times = [['Brief', t.brief], [t.towMode === 'taxi' ? 'TAXI' : 'ลาก', t.tow], ['วิ่งขึ้น', t.takeoff]].filter(a => a[1]).map(a => esc(a[0]) + ' <b>' + esc(a[1]) + '</b>').join(' &nbsp;·&nbsp; ');
       const park = [['ขาไป', x.parking.out], ['ขากลับ', x.parking.ret]].filter(a => a[1]).map(a => esc(a[0]) + ': ' + esc(a[1])).join(' &nbsp;·&nbsp; ');
-      return `<div class="d-mission"><div class="d-mhead">ภารกิจที่ ${i + 1}${x.aircraftLabel ? ' | ' + esc(x.aircraftLabel) : ''}</div>
+      const pair = x.pairLabel || x.pairTail || '—';
+      const role = x.acRole === 'primary' ? '<b>บ.จริง</b> — บ.สำรอง: ' + esc(pair) : x.acRole === 'spare' ? '<b>บ.สำรอง</b> ของ บ.จริง: ' + esc(pair) : '';
+      return `<div class="d-mission"><div class="d-mhead">ภารกิจที่ ${i + 1}${x.aircraftLabel ? ' | ' + esc(x.aircraftLabel) : ''}${x.acRole ? ' · ' + (x.acRole === 'primary' ? 'บ.จริง' : 'บ.สำรอง') : ''}</div>
         <table><tbody>
-        ${row('ประเภท', esc(x.type))}${row('ภารกิจ', x.title, true)}${row('Callsign', esc(x.callsign))}${row('เส้นทางบิน', esc(x.route))}
-        ${row('เชื้อเพลิง', esc(x.fuel))}${row('เวลา', times)}${row('ผู้โดยสาร', esc(x.pax))}${row('จุดจอด', park)}
+        ${row('ประเภท', esc(x.type))}${row('บ.จริง / บ.สำรอง', role)}${row('ภารกิจ', x.title, true)}${row('Callsign', esc(x.callsign))}${row('เส้นทางบิน', esc(x.route))}
+        ${row('เชื้อเพลิง', x.fuel !== '' ? esc(fmtFuel(x.fuel)) + ' TONS' : '')}${row('เวลา', times)}${row('ผู้โดยสาร', esc(x.pax))}
+        ${row('ผอ.เดินทาง', vip(x.director))}${row('ผู้บังคับ บ.', vip(x.acCommander))}${row('จุดจอด', park)}
         ${row('นักบิน', crew ? `<div class="d-crew">${crew}</div>` : '')}${row('POC', esc(x.poc))}${row('การแต่งกาย', esc(x.dress))}${row('หมายเหตุ', x.notes, true)}
         </tbody></table></div>`;
     }).join('');
     const apprStatus = { NEW: 'ยังไม่บันทึก', PENDING: 'PENDING — รอพิจารณา', APPROVED: 'APPROVED — อนุมัติ', DENIED: 'DENIED — ไม่อนุมัติ', RELEASED: 'APPROVED — อนุมัติ / RELEASED' }[st];
     return `<div class="doc">
       <div class="d-stamp ${st}">${esc(stamp)}</div>
-      <div class="d-title">${esc(o.title || S.settings.unitTitle)}</div>
+      <div class="d-title">${esc(S.settings.unitTitle || o.title)}</div>
       <div class="d-date">${esc(thaiDate(day.date))}</div>
       <div class="d-sec">ข้อมูลเวรและผู้รับผิดชอบ</div>
       <table><tbody>
-        <tr><td class="l">${DUTY_FIELDS[0][1]}</td><td>${dutyCell('wingDuty')}</td><td class="l">${DUTY_FIELDS[1][1]}</td><td>${dutyCell('controller')}</td></tr>
-        <tr><td class="l">${DUTY_FIELDS[2][1]}</td><td>${dutyCell('scheduler')}</td><td class="l">${DUTY_FIELDS[3][1]}</td><td>${dutyCell('documents')}</td></tr>
-        <tr><td class="l">${DUTY_FIELDS[4][1]}</td><td>${dutyCell('refuel')}</td><td class="l">${DUTY_FIELDS[5][1]}</td><td>${dutyCell('contact')}</td></tr>
+        <tr><td class="l">น.เวรกองบิน 6</td><td>${nm(d.wingDuty)}</td><td class="l">ผช.น.เวร กองบิน 6</td><td>${nm(d.wingDutyAsst)}</td></tr>
+        <tr><td class="l">น.เวร Controller</td><td>${nm(d.controller)}</td><td class="l">น.จัดบิน</td><td>${names(d.schedulers)}</td></tr>
+        <tr><td class="l">น.เอกสาร</td><td>${names(d.documents)}</td><td class="l">น.ควบคุมการถ่าย ชพ.</td><td>${refuel}</td></tr>
+        <tr><td class="l">น.จัดบิน (ติดต่อ)</td><td colspan="3">${nm(d.contact)}${d.contact.phone ? ' | ' + esc(d.contact.phone) : ''}</td></tr>
       </tbody></table>
+      ${stbyOn.length ? `<div class="d-sec">นบ.STBY</div><table><tbody>${stbyOn.map(([k, label]) => `<tr><td class="l" style="width:30%">${esc(label)}</td>
+        <td>${o.standby[k].pilots.filter(p => p.name).map((p, j) => (j + 1) + '. ' + esc(p.name)).join(' &nbsp;&nbsp; ') || '—'}</td></tr>`).join('')}</tbody></table>` : ''}
       <div class="d-sec">สถานภาพเครื่องบินโดยรวม${st === 'RELEASED' && o.aircraftSnapshot ? ' (ณ เวลา release)' : ''}</div>
       <table><thead><tr><th style="width:20%">เครื่อง / แบบ</th><th style="width:11%">สถานะ</th><th>ข้อขัดข้อง / รายละเอียด</th><th style="width:24%">Plan Check</th></tr></thead><tbody>
         ${ac.length ? ac.map(a => `<tr><td>${esc(a.tail)} / ${esc(a.type)}</td><td class="center ${esc(a.status)}"><b>${esc(a.status)}</b></td><td>${esc(a.detail)}</td><td>${esc(a.planCheck)}</td></tr>`).join('') : '<tr><td colspan="4" class="center">—</td></tr>'}
@@ -709,6 +791,19 @@
   async function saveAll() {
     const b = batchInfo();
     if (!b.toSave.length) { toast('ไม่มีการเปลี่ยนแปลงที่ต้องบันทึก'); return; }
+    for (const d of b.toSave) {                // ผอ.เดินทาง / ผู้บังคับ บ. ที่ติ๊กไว้ ต้องกรอกครบ
+      const bad = [];
+      (d.order.noMission ? [] : d.order.missions).forEach((m, i) => [['director', 'ผอ.เดินทาง'], ['acCommander', 'ผู้บังคับ บ.']].forEach(([k, l]) => {
+        const v = m[k]; if (v.on && !(v.name.trim() && v.position.trim() && v.phone.trim())) bad.push('ภารกิจที่ ' + (i + 1) + ': ' + l);
+      }));
+      if (bad.length) {
+        if (d.date !== S.date) activate(d.date);
+        renderView();
+        toast(dayShort(d.date) + ' — กรอกชื่อ ตำแหน่ง เบอร์โทร. ให้ครบ (' + bad.join(', ') + ')', true);
+        return;
+      }
+      d.order.title = S.settings.unitTitle;     // หัวเรื่องคงที่ตามการตั้งค่า
+    }
     try {
       const r = await api('saveBatch', {
         days: b.toSave.map(d => ({ date: d.date, order: d.order, baseVersion: d.meta && d.meta.exists ? d.meta.version : 0 })),
@@ -759,12 +854,14 @@
       if (!src) { toast('ไม่มีใบจัดบินของ' + thaiDate(prevDate), true); return; }
       const pick = await modal({ title: 'คัดลอกจาก' + thaiDate(prevDate), body: `<p class="small muted">ข้อมูลที่เลือกจะแทนที่ข้อมูลเดิมของ${esc(thaiDate(S.date))}</p>
         <label class="row"><input type="checkbox" id="cpDuty" checked> ข้อมูลเวรและผู้รับผิดชอบ</label>
+        <label class="row" style="margin-top:6px"><input type="checkbox" id="cpStby" checked> นบ.STBY</label>
         <label class="row" style="margin-top:6px"><input type="checkbox" id="cpMis" checked> ภารกิจและนักบิน (${src.noMission ? 'ไม่มีภารกิจ' : src.missions.length + ' ภารกิจ'})</label>
         <label class="row" style="margin-top:6px"><input type="checkbox" id="cpRem"> หมายเหตุทั่วไป</label>`,
-        foot: [{ label: 'ยกเลิก', cls: 'ghost', value: null }, { label: 'คัดลอก', cls: 'primary', value: bg => ({ duty: $('#cpDuty', bg).checked, mis: $('#cpMis', bg).checked, rem: $('#cpRem', bg).checked }) }] });
+        foot: [{ label: 'ยกเลิก', cls: 'ghost', value: null }, { label: 'คัดลอก', cls: 'primary', value: bg => ({ duty: $('#cpDuty', bg).checked, stby: $('#cpStby', bg).checked, mis: $('#cpMis', bg).checked, rem: $('#cpRem', bg).checked }) }] });
       if (!pick) return;
       const c = clone(src);
       if (pick.duty) S.order.duty = c.duty;
+      if (pick.stby) S.order.standby = c.standby;
       if (pick.mis) { S.order.noMission = c.noMission; S.order.missions = c.missions.map(m => Object.assign(m, { id: rid() })); if (!S.order.noMission && !S.order.missions.length) S.order.missions.push(blankMission()); }
       if (pick.rem) S.order.remarks = c.remarks;
       markDirty(); renderView(); toast('คัดลอกแล้ว — อย่าลืมตรวจและบันทึก');
@@ -832,7 +929,20 @@
       markDirty(); renderView();
     },
     'pick-crew': el => openPicker({ m: Number(el.dataset.m) }),
-    'pick-duty': el => openPicker({ path: el.dataset.path }),
+    'pick-duty': el => openPicker({ path: el.dataset.path, tk: el.dataset.tk }),
+    'person-add': el => {
+      const list = getPath(S.order, el.dataset.list);
+      if (list.length < Number(el.dataset.max)) { list.push(blankP()); markDirty(); renderView(); }
+    },
+    'person-rm': el => {
+      const list = getPath(S.order, el.dataset.list), i = Number(el.dataset.i);
+      list.splice(i, 1); if (!list.length) list.push(blankP());
+      if (el.dataset.list === 'duty.documents') {          // ให้ น.ควบคุมการถ่าย ชพ. ยังชี้คนเดิม
+        const ri = Number(S.order.duty.refuelIdx);
+        S.order.duty.refuelIdx = ri === i ? -1 : ri > i ? ri - 1 : ri;
+      }
+      markDirty(); renderView();
+    },
     'crew-rm': el => { S.order.missions[+el.dataset.m].crew.splice(+el.dataset.c, 1); markDirty(); renderView(); },
     'crew-up': el => { const c = S.order.missions[+el.dataset.m].crew, j = +el.dataset.c; [c[j - 1], c[j]] = [c[j], c[j - 1]]; markDirty(); renderView(); },
     'change-pw': () => { $('#menu').hidden = true; renderChangePassword(false); },
@@ -965,6 +1075,8 @@
         <section class="card"><h2>ภารกิจตามประเภท</h2><div style="margin-top:10px">${bars(d.byType, (r) => esc(r.key))}</div></section>
         <section class="card"><h2>จำนวนเที่ยวบินรายบุคคล</h2><div style="margin-top:10px">${bars(d.byPerson, (r) => esc(r.name), 20)}</div></section>
         <section class="card"><h2>ตามหน้าที่</h2><div style="margin-top:10px">${bars(d.byRole, (r) => esc(r.key))}</div></section>
+        <section class="card"><h2>นบ.STBY รายบุคคล</h2><div style="margin-top:10px">${bars(d.byStandby || [], (r) => esc(r.name), 20)}</div></section>
+        <section class="card"><h2>นบ.STBY ตามประเภท</h2><div style="margin-top:10px">${bars(d.standbyByType || [], (r) => esc(r.key))}</div></section>
       </div>`;
   }
   ACTIONS['stats-load'] = async () => {
@@ -1104,8 +1216,9 @@
     const t = e.target;
     if (t.dataset.bind && S.order && !t.closest('.modal-bg')) {
       setPath(S.order, t.dataset.bind, t.value);
-      const m = t.dataset.bind.match(/^(duty\.\w+)\.name$/);
-      if (m) getPath(S.order, m[1]).id = '';     // พิมพ์ชื่อเอง → ไม่ผูกกับรหัสในฐานข้อมูล
+      const m = t.dataset.bind.match(/^(.+)\.name$/);
+      if (m) { const parent = getPath(S.order, m[1]); if (parent && 'id' in parent) parent.id = ''; }
+      if (/\.(director|acCommander)\.(name|position|phone)$/.test(t.dataset.bind)) t.closest('.field').classList.toggle('missing', !t.value.trim());   // พิมพ์ชื่อเอง → ไม่ผูกกับรหัสในฐานข้อมูล
       markDirty();
     } else if (t.dataset.hol && holEdit) {
       const [i, f] = t.dataset.hol.split('.'); holEdit.list[+i][f] = t.value;
@@ -1120,7 +1233,22 @@
       if (/^\d{3}$/.test(v)) v = '0' + v;
       if (/^\d{4}$/.test(v)) { t.value = v; setPath(S.order, t.dataset.bind, v); markDirty(); }
     }
+    if (t.dataset.bool && S.order) {
+      setPath(S.order, t.dataset.bool, t.checked); markDirty(); renderView(); return;
+    }
+    if (t.hasAttribute('data-rerender') && t.dataset.bind && S.order) {
+      setPath(S.order, t.dataset.bind, t.value);
+      const mm = t.dataset.bind.match(/^missions\.(\d+)\.acRole$/);
+      if (mm && !t.value) Object.assign(S.order.missions[+mm[1]], { pairTail: '', pairLabel: '' });
+      markDirty(); renderView(); return;
+    }
     const act = t.dataset.actChange;
+    if (act === 'pair') {
+      const m = S.order.missions[+t.dataset.m];
+      const a = (S.aircraft.list || []).find(x => x.tail === t.value);
+      m.pairTail = t.value; m.pairLabel = a ? aircraftLabel(a) : '';
+      markDirty(); return;
+    }
     if (act === 'aircraft') {
       const m = S.order.missions[+t.dataset.m];
       const a = (S.aircraft.list || []).find(x => x.tail === t.value);
@@ -1137,6 +1265,9 @@
       } else { o.noMission = false; if (!o.missions.length) o.missions.push(blankMission()); }
       markDirty(); renderView();
     }
+  });
+  document.addEventListener('focusin', e => {   // อัปเดตรายชื่อ น.เอกสาร ในตัวเลือก น.ควบคุมการถ่าย ชพ.
+    if (e.target.matches && e.target.matches('select[data-refuel]') && S.order) e.target.innerHTML = refuelOptions();
   });
   window.addEventListener('beforeunload', e => { if (S.user && anyDirty()) { e.preventDefault(); e.returnValue = ''; } });
 

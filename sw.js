@@ -1,7 +1,7 @@
 /* Service worker: เก็บไฟล์ของแอปไว้ในเครื่องเพื่อเปิดเร็วและเปิดได้แม้เน็ตไม่ดี
  * ไม่ cache ข้อมูลจาก API (Apps Script อยู่คนละโดเมน จึงไม่ผ่าน worker นี้)
  * เมื่อแก้ไฟล์ใดๆ ให้เพิ่มเลข VERSION เพื่อให้ผู้ใช้ได้ไฟล์ใหม่ */
-const VERSION = 'fo602-v1.3.0';
+const VERSION = 'fo602-v1.4.0';
 const SHELL = [
   './', 'index.html', 'css/app.css', 'js/config.js', 'js/api.js', 'js/app.js',
   'js/demo/gas-emulator.js', 'js/demo/demo-backend.js', 'backend/Code.gs',

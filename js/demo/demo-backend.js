@@ -4,7 +4,7 @@
  */
 (function (root) {
   'use strict';
-  const STATE_KEY = 'fo602_demo_state_v3';
+  const STATE_KEY = 'fo602_demo_state_v4';
 
   const DEMO_USERS = [
     ['admin', 'ผู้ดูแลระบบ (ทดลอง)', 'admin', 'admin1234'],

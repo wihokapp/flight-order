@@ -56,10 +56,33 @@ with sync_playwright() as p:
     assert page.locator('.mission').count() == 1, 'default 1 mission'
     assert page.locator('.day-tab').count() == 0, 'no tabs for single day'
     page.fill('[data-bind="duty.wingDuty.name"]', 'น.ต.เวรทดสอบ ก.')
-    page.click('[data-act=pick-duty][data-path="duty.scheduler"]')
+    assert page.locator('[data-bind=title]').count() == 0, 'title is fixed'
+    page.fill('[data-bind="duty.wingDutyAsst.name"]', 'ร.ท.ผช.เวร ข.')
+    page.click('[data-act=pick-duty][data-path="duty.schedulers.0"]')
     page.wait_for_selector('.pick'); page.click('.pick >> nth=0'); page.wait_for_selector('.modal-bg', state='detached')
+    page.click('[data-act=person-add][data-list="duty.schedulers"]'); page.fill('[data-bind="duty.schedulers.1.name"]', 'ร.อ.จัดบินสอง ส.')
+    assert page.locator('[data-act=person-add][data-list="duty.schedulers"]').count() == 0, 'max 2 schedulers'
+    page.fill('[data-bind="duty.documents.0.name"]', 'ร.อ.เอกสารหนึ่ง ก.')
+    page.click('[data-act=person-add][data-list="duty.documents"]'); page.fill('[data-bind="duty.documents.1.name"]', 'ร.ท.เอกสารสอง ข.')
+    page.click('[data-act=person-add][data-list="duty.documents"]'); page.fill('[data-bind="duty.documents.2.name"]', 'ร.ต.เอกสารสาม ค.')
+    assert page.locator('[data-act=person-add][data-list="duty.documents"]').count() == 0, 'max 3 documents'
+    page.focus('select[data-refuel]'); page.select_option('select[data-refuel]', '1')
+    page.check('[data-bool="standby.a340.on"]'); page.wait_for_selector('[data-path="standby.a340.pilots.1"]')
+    assert page.locator('[data-path^="standby.royal320"]').count() == 0, 'unticked STBY hidden'
+    for j in range(2):
+        page.click(f'[data-act=pick-duty][data-path="standby.a340.pilots.{j}"]'); page.wait_for_selector('.pick')
+        page.click(f'.pick >> nth={j + 5}'); page.wait_for_selector('.modal-bg', state='detached')
+    assert page.locator('[data-act=person-add]').count() == 0
     page.select_option('[data-act-change=aircraft][data-m="0"]', '60205')
     page.fill('[data-bind="missions.0.callsign"]', 'WHK05')
+    page.fill('[data-bind="missions.0.fuel"]', '9')
+    page.select_option('[data-bind="missions.0.times.towMode"]', 'taxi')
+    t = page.locator('[data-bind="missions.0.times.tow"]'); t.fill('0650'); t.press('Tab')
+    page.select_option('[data-bind="missions.0.acRole"]', 'primary'); page.wait_for_selector('[data-act-change=pair][data-m="0"]')
+    page.select_option('[data-act-change=pair][data-m="0"]', '60204')
+    page.select_option('[data-bind="missions.0.dress"]', 'ชุดแขนยาวบ่าอ่อน')
+    page.check('[data-bool="missions.0.director.on"]'); page.wait_for_selector('[data-bind="missions.0.director.name"]')
+    assert sorted(page.eval_on_selector_all('[data-bind="missions.0.type"] option', 'els => els.map(e => e.textContent)')) == sorted(['ภารกิจ', 'ฝึกบิน'])
     page.fill('[data-bind="missions.0.title"]', 'ภารกิจทดสอบ ส่งคณะ')
     t = page.locator('[data-bind="missions.0.times.brief"]'); t.fill('640'); t.press('Tab')
     assert page.input_value('[data-bind="missions.0.times.brief"]') == '0640', 'time pad'
@@ -72,10 +95,17 @@ with sync_playwright() as p:
     assert page.locator('.mission').count() == 2
     page.select_option('[data-act-change=aircraft][data-m="1"]', '60204')
     page.fill('[data-bind="missions.1.title"]', 'ฝึกบินตามแผน')
+    page.select_option('[data-bind="missions.1.type"]', 'ฝึกบิน')
     pick_pilots(page, 1, 1)
     assert page.locator('#mission-1 .dup').count() == 1, 'duplicate badge'
+    page.click('.card [data-act=save] >> nth=0'); page.wait_for_selector('.toast.err')
+    assert 'ผอ.เดินทาง' in page.inner_text('.toast.err') and page.locator('.field.missing').count() == 3, 'VIP fields required'
+    page.fill('[data-bind="missions.0.director.name"]', 'นายทดสอบ ผอ.')
+    page.fill('[data-bind="missions.0.director.position"]', 'ผอ.สำนักทดสอบ')
+    page.fill('[data-bind="missions.0.director.phone"]', '081-111-1111')
+    page.screenshot(path=f'{OUT}/9-editor-v2.png', full_page=True)
     page.click('.card [data-act=save] >> nth=0'); page.wait_for_selector('.day-card .chip.PENDING')
-    print('  ✓ single-day order saved (PENDING)')
+    print('  ✓ single-day order saved (PENDING) with new fields + VIP validation')
 
     page.click('.tabs [data-tab=aircraft]'); page.click('[data-act=ac-edit]')
     page.select_option('[data-ac="2.status"]', 'NMCS')
@@ -89,9 +119,17 @@ with sync_playwright() as p:
     print('  ✓ viewer: pending hidden'); logout(page)
 
     login(page, 'ผู้ดูแลเอกสาร'); goto(page, D1)
-    page.wait_for_selector('.doc'); assert 'ภารกิจทดสอบ ส่งคณะ' in page.inner_text('.doc')
+    page.wait_for_selector('.doc'); txt = page.inner_text('.doc')
+    for want in ['ภารกิจทดสอบ ส่งคณะ', 'ผช.น.เวร กองบิน 6', 'ร.ท.ผช.เวร ข.', 'ร.อ.จัดบินสอง ส.', 'ร.ต.เอกสารสาม ค.', 'STBY A340', '9.0 TONS', 'TAXI',
+                 'บ.จริง', 'บ.สำรอง: A340', 'นายทดสอบ ผอ.', 'ผอ.สำนักทดสอบ', '081-111-1111', 'ชุดแขนยาวบ่าอ่อน', 'ฝึกบิน']:
+        assert want in txt, 'doc missing: ' + want
+    assert 'STBY SSJ100' not in txt and 'ผู้บังคับ บ.' not in txt, 'unticked items hidden'
+    assert page.inner_text('.doc table >> nth=0').count('ร.ท.เอกสารสอง ข.') == 2, 'refuel = document #2'
     assert page.locator('[data-bind]').count() == 0 and page.locator('[data-act=save],[data-act=approve],[data-act=deny],[data-act=release],[data-act=ac-edit]').count() == 0
     assert page.locator('[data-act=print-all]').count() == 1
+    page.evaluate("window.print = () => {}"); page.click('[data-act=print-all]'); page.wait_for_timeout(200)
+    page.emulate_media(media='print'); page.pdf(path=f'{OUT}/order-v2.pdf', format='A4', print_background=True, prefer_css_page_size=True)
+    page.emulate_media(media='screen')
     page.click('.tabs [data-tab=aircraft]'); assert page.locator('[data-act=ac-edit]').count() == 0
     page.click('.tabs [data-tab=order]')
     print('  ✓ documents: sees pending, read-only, can print'); logout(page)
@@ -172,8 +210,8 @@ with sync_playwright() as p:
     mctx = b.new_context(viewport={'width': 390, 'height': 844}, device_scale_factor=2, is_mobile=True, has_touch=True)
     m = mctx.new_page()
     m.on('pageerror', lambda e: errors.append('m pageerror: ' + str(e)))
-    state = page.evaluate("localStorage.getItem('fo602_demo_state_v3')")
-    m.goto(BASE); m.evaluate("s => localStorage.setItem('fo602_demo_state_v3', s)", state)
+    state = page.evaluate("localStorage.getItem('fo602_demo_state_v4')")
+    m.goto(BASE); m.evaluate("s => localStorage.setItem('fo602_demo_state_v4', s)", state)
     login(m, 'ผู้ชม'); goto(m, BATCH[0], BATCH[-1])
     m.wait_for_selector('.doc'); assert 'ภารกิจวันเสาร์' in m.inner_text('.doc')
     m.screenshot(path=f'{OUT}/8-viewer-batch-mobile.png', full_page=False)

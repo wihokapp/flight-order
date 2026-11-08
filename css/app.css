@@ -124,6 +124,26 @@ main.view { max-width: 1080px; margin: 0 auto; padding: 14px 14px calc(24px + va
 .day-tab.on { border: 2px solid var(--navy); background: var(--blue-2); padding: 7px 9px; }
 .day-card { border-left: 4px solid var(--navy); }
 
+/* ช่องหลายคน / STBY / ผอ.เดินทาง */
+.multi { display: grid; gap: 8px; align-content: start; padding: 10px; border-radius: 8px; background: #f7f9fb; }
+.multi-head { font-size: 13.5px; color: var(--navy-ink); }
+.multi .btn { justify-self: start; }
+.stby { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin-top: 8px; }
+.stby.on { border-color: var(--navy-2); background: var(--blue-2); }
+.stby-head { cursor: pointer; gap: 8px; }
+.stby-head input, .vip > label input { width: 18px; height: 18px; accent-color: var(--navy); }
+.vip { border: 1px dashed var(--line-strong); border-radius: 8px; padding: 8px 10px; }
+.vip.on { border-style: solid; border-color: var(--navy-2); background: #f7f9fb; }
+.vip > label { cursor: pointer; font-weight: 600; gap: 8px; }
+.field.missing input { border-color: var(--bad); background: #fff7f6; }
+.suffix { display: flex; align-items: stretch; }
+.suffix input { border-radius: 8px 0 0 8px !important; min-width: 0; }
+.suffix em { font-style: normal; font-weight: 700; font-size: 13px; display: flex; align-items: center; padding: 0 10px;
+  background: var(--blue-2); border: 1px solid var(--line); border-left: 0; border-radius: 0 8px 8px 0; color: var(--ink-2); }
+select.mini { border: 0; background: none; padding: 0; min-height: 0; font-size: 12.5px; font-weight: 700; color: var(--navy-2);
+  width: auto; cursor: pointer; justify-self: start; }
+.field > select.mini { width: fit-content; }
+
 /* person field */
 .person { display: flex; gap: 6px; }
 .person input { flex: 1; min-width: 0; }

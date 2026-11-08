@@ -276,4 +276,44 @@ ok('documents role: sees unreleased, read-only everywhere', () => {
   assert(nu.tempPassword);
 });
 
+ok('schema v2: duty lists, refuel from documents, STBY, mission fields', () => {
+  const D4 = '2026-12-15';
+  const o = {
+    title: 'แก้หัวเรื่องเอง',
+    duty: { scheduler: { id: 'OPS005', name: 'เก่า ก.' },                 // ข้อมูลแบบเดิม → ย้ายเป็น schedulers
+      documents: [{ name: 'เอกสาร 1' }, { name: 'เอกสาร 2' }, { name: 'เอกสาร 3' }, { name: 'เกิน' }], refuelIdx: '1',
+      wingDutyAsst: { name: 'ผช.เวร' } },
+    standby: { royal320: { on: true, pilots: [{ id: 'OPS001', name: 'ก ข.' }, { id: 'OPS002', name: 'ค ง.' }, { name: '' }, { name: 'เกิน' }] },
+      a340: { on: false, pilots: [{ name: 'ไม่แสดง' }] } },
+    missions: [{ type: 'ฝึกบิน', fuel: '9.5 TONS', times: { tow: '0650', towMode: 'taxi' }, acRole: 'spare', pairTail: '60205', pairLabel: 'ACJ320 (60205)',
+      director: { on: true, name: 'ผอ.', position: 'ผอ.กอง', phone: '02' }, acCommander: { on: 'x' }, crew: [{ id: 'OPS003', name: 'จ ฉ.', role: 'นบ.1' }] },
+      { acRole: 'hack', times: {} }],
+  };
+  const r = must({ action: 'saveOrder', token: tS, date: D4, order: o, baseVersion: 0 });
+  const x = r.order;
+  assert.strictEqual(x.schema, 2);
+  assert.deepStrictEqual(x.duty.schedulers.map(p => p.name), ['เก่า ก.']);
+  assert.strictEqual(x.duty.documents.length, 3, 'documents max 3');
+  assert.strictEqual(x.duty.refuelIdx, 1); assert.strictEqual(x.duty.refuel.name, 'เอกสาร 2');
+  assert.strictEqual(x.duty.wingDutyAsst.name, 'ผช.เวร');
+  assert.strictEqual(x.standby.royal320.pilots.length, 3, 'royal STBY 3 slots');
+  assert.strictEqual(x.standby.a320.on, false);
+  const m = x.missions[0];
+  assert.strictEqual(m.fuel, '9.5'); assert.strictEqual(m.times.towMode, 'taxi'); assert.strictEqual(m.acRole, 'spare');
+  assert.strictEqual(m.director.on, true); assert.strictEqual(m.acCommander.on, true);
+  assert.strictEqual(x.missions[1].acRole, ''); assert.strictEqual(x.missions[1].times.towMode, 'tow');
+  const bad = must({ action: 'saveOrder', token: tS, date: D4, order: Object.assign({}, o, { duty: { documents: [{ name: 'a' }], refuelIdx: 2 } }), baseVersion: r.version });
+  assert.strictEqual(bad.order.duty.refuelIdx, -1, 'refuel index out of range → none');
+  // STBY อยู่ใน CrewLog แต่ไม่นับเป็นเที่ยวบิน
+  const ap = must({ action: 'approveOrder', token: tC, date: D4, version: bad.version });
+  const back = must({ action: 'saveOrder', token: tS, date: D4, order: o, baseVersion: ap.version });
+  const ap2 = must({ action: 'approveOrder', token: tC, date: D4, version: back.version });
+  must({ action: 'releaseOrder', token: tS, date: D4, version: ap2.version });
+  const cl = be._gs.db_().getSheetByName('CrewLog').getDataRange().getValues().filter(rw => rw[0] === D4);
+  assert.strictEqual(cl.filter(rw => rw[2] === 'STBY').length, 2, '2 named royal STBY rows');
+  const st = must({ action: 'stats', token: tA, from: D4, to: D4 });
+  assert.strictEqual(st.byPerson.length, 1); assert.strictEqual(st.byStandby.length, 2);
+  assert.strictEqual(st.standbyByType[0].key, 'STBY A319/ACJ320 นบ.ราชฯ');
+});
+
 console.log('\n' + passed + ' tests passed');
