@@ -265,6 +265,19 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 14px; }
 .secret { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 20px; letter-spacing: 1px; background: var(--blue-2);
   padding: 10px 14px; border-radius: 8px; text-align: center; user-select: all; }
 
+/* LINE QR */
+.qr-box { display: grid; justify-items: center; text-align: center; gap: 6px; }
+.qr-name { font-weight: 800; font-size: 17px; color: var(--navy-ink); }
+.qr-code { font-size: 15px; letter-spacing: 1px; }
+.qr-steps { text-align: left; margin: 4px 0; padding-left: 20px; }
+code.sel { user-select: all; word-break: break-all; background: var(--blue-2); padding: 2px 6px; border-radius: 4px; font-size: 12px; }
+.line-msg { margin-bottom: 10px; }
+.line-bubble { background: #e6f9e9; border-radius: 12px; padding: 8px 12px; font-size: 14px; display: inline-block; max-width: 100%; }
+#printRoot .qr-sheet { display: grid; grid-template-columns: 1fr 1fr; gap: 6mm; }
+#printRoot .qr-card { border: 1px dashed #888; border-radius: 4mm; padding: 4mm; text-align: center; break-inside: avoid; page-break-inside: avoid; font-family: var(--font); }
+#printRoot .qr-card .qr-name { font-size: 13pt; }
+#printRoot .qr-card .qr-hint { font-size: 8.5pt; color: #333; margin-top: 2mm; }
+
 /* ───────── Document view (screen preview & print) ───────── */
 .doc-wrap { overflow-x: auto; }
 .doc { width: 196mm; max-width: 100%; margin: 0 auto; background: #fff; color: #000; font-size: 10pt; line-height: 1.35; padding: 8mm 7mm;
