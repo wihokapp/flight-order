@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  const APP_VERSION = '1.4.4';   // ให้ตรงกับ VERSION ใน sw.js
+  const APP_VERSION = '1.4.5';   // ให้ตรงกับ VERSION ใน sw.js
 
   // ───────────────────────── Constants ─────────────────────────
   const ROLE_LABEL = { admin: 'ผู้ดูแลระบบ', scheduler: 'ผู้จัดบิน', commander: 'ผู้บังคับบัญชา', documents: 'ผู้ดูแลเอกสาร', viewer: 'ผู้ชม' };
@@ -13,7 +13,10 @@
     manageUsers: ['admin'], settings: ['admin'], deleteOrder: ['admin'],
   };
   const DUTY_SINGLE = [['wingDuty', 'น.เวรกองบิน 6'], ['wingDutyAsst', 'ผช.น.เวร กองบิน 6'], ['controller', 'น.เวร Controller']];
-  const DUTY_MULTI = { schedulers: ['น.จัดบิน', 2], documents: ['น.เอกสาร', 3] };
+  const DUTY_MULTI = { schedulers: ['น.จัดบินเวรวันถัดไป', 2], documents: ['น.เอกสาร', 3] };
+  // จุดจอด บ. — เลือก "อื่น ๆ" แล้วกรอกเองได้ (ตอนพิมพ์แสดงเฉพาะข้อความที่กรอก)
+  const PARKING = ['ฝูง.602 บน.6', 'ท่าอากาศยานทหาร 1', 'ท่าอากาศยานทหาร 2', 'N2', 'N23R', 'N18R'];
+  const parkingOther = new Set();   // ช่องที่ผู้ใช้เลือก "อื่น ๆ" แต่ยังไม่ได้กรอก
   // นบ.STBY: [key, ชื่อ, จำนวนคน, แบบสำหรับแสดงคุณสมบัติ] — ต้องตรงกับ STBY_TYPES ใน Code.gs
   const STBY_TYPES = [['royal320', 'STBY A319/ACJ320 นบ.ราชฯ', 3, 'A319/320'], ['a320', 'STBY A319/ACJ320', 2, 'A319/320'],
     ['a340', 'STBY A340', 2, 'A340'], ['ssj', 'STBY SSJ100', 2, 'SSJ']];
@@ -78,9 +81,16 @@
       times: { brief: '', tow: '', takeoff: '', towMode: 'tow' }, pax: '', parking: { out: '', ret: '' },
       director: blankVip(), acCommander: blankVip(), hospitality: { on: false, detail: '' }, crew: [], poc: '', dress: '', notes: '' };
   }
+  /** ผู้จัดทำใบ = ผู้ใช้ที่ login (ผู้จัดบิน) — จำเบอร์ไว้ในเครื่องนี้ */
+  function myContact() {
+    if (!S.user || !can('editOrder')) return blankP();
+    let phone = '';
+    try { phone = localStorage.getItem('fo602_phone_' + S.user.username) || ''; } catch (e) { /* ignore */ }
+    return { id: '', name: S.user.displayName, phone };
+  }
   function blankOrder() {
     return { title: S.settings.unitTitle,
-      duty: { wingDuty: blankP(), wingDutyAsst: blankP(), controller: blankP(), schedulers: [blankP()], documents: [blankP()], refuelIdx: -1, contact: blankP() },
+      duty: { wingDuty: blankP(), wingDutyAsst: blankP(), controller: blankP(), schedulers: [blankP()], documents: [blankP()], refuelIdx: -1, contact: myContact() },
       standby: blankStandby(), noMission: false, missions: [blankMission()], remarks: '' };
   }
   /** แปลงข้อมูลเก่า/ใหม่ให้เป็นโครงสร้างปัจจุบันเสมอ */
@@ -521,7 +531,8 @@
   }
   function multiField(key) {
     const [label, max] = DUTY_MULTI[key], list = S.order.duty[key];
-    return `<div class="multi"><div class="multi-head"><b>${esc(label)}</b> <span class="muted small">(สูงสุด ${max} คน)</span></div>
+    const hint = key === 'schedulers' ? `<div class="small muted">เข้าเวร${esc(thaiDate(addDays(S.date, 1)))} — ไม่ต้องใส่เบอร์</div>` : '';
+    return `<div class="multi"><div class="multi-head"><b>${esc(label)}</b> <span class="muted small">(สูงสุด ${max} คน)</span>${hint}</div>
       ${list.map((p, i) => personField(`duty.${key}.${i}`, label + ' คนที่ ' + (i + 1), p, { rm: list.length > 1 ? [`duty.${key}`, i] : null })).join('')}
       ${list.length < max ? `<button class="btn sm ghost" data-act="person-add" data-list="duty.${key}" data-max="${max}">＋ เพิ่ม${esc(label)}</button>` : ''}</div>`;
   }
@@ -531,6 +542,15 @@
   }
   function inp(path, label, val, attrs, cls) {
     return `<label class="field ${cls || ''}"><span>${esc(label)}</span><input data-bind="${path}" value="${esc(val)}" ${attrs || ''}></label>`;
+  }
+  function parkingField(i, k, label, val) {
+    const path = `missions.${i}.parking.${k}`;
+    const other = (val && !PARKING.includes(val)) || parkingOther.has(S.date + '|' + path);
+    return `<div class="field"><span>${esc(label)}</span>
+      <select data-parking="${path}"><option value="">— เลือก —</option>
+        ${PARKING.map(p => `<option ${!other && p === val ? 'selected' : ''}>${esc(p)}</option>`).join('')}
+        <option value="__other" ${other ? 'selected' : ''}>อื่น ๆ</option></select>
+      ${other ? `<input style="margin-top:4px" data-bind="${path}" value="${esc(val)}" placeholder="ระบุจุดจอด" maxlength="200">` : ''}</div>`;
   }
   function vipBlock(i, key, label, v) {
     const miss = f => v.on && !String(v[f]).trim() ? 'missing' : '';
@@ -610,8 +630,8 @@
             ${inp(`missions.${i}.times.takeoff`, 'เวลาวิ่งขึ้น', m.times.takeoff, 'placeholder="0730 หรือ เมื่อได้รับการประสาน" maxlength="100"')}
           </div>
           <div class="grid g2">
-            ${inp(`missions.${i}.parking.out`, 'จุดจอดขาไป', m.parking.out)}
-            ${inp(`missions.${i}.parking.ret`, 'จุดจอดขากลับ', m.parking.ret)}
+            ${parkingField(i, 'out', 'จุดจอดขาไป', m.parking.out)}
+            ${parkingField(i, 'ret', 'จุดจอดขากลับ', m.parking.ret)}
           </div>
           <div class="grid g2">${vipBlock(i, 'director', 'ผอ.เดินทาง', m.director)}${vipBlock(i, 'acCommander', 'ผู้บังคับ บ.', m.acCommander)}</div>
           <div class="vip ${m.hospitality.on ? 'on' : ''}"><label class="row"><input type="checkbox" data-bool="missions.${i}.hospitality.on" ${m.hospitality.on ? 'checked' : ''}> มีจัดรับรอง</label>
@@ -637,12 +657,16 @@
 
     return `
       <section class="card">
+        <div class="card-head"><h2>ผู้จัดทำใบจัดบิน (ติดต่อ)</h2><span class="muted small">น.จัดบินที่ทำใบนี้ — ชื่อและเบอร์จะแสดงเป็นผู้ติดต่อในใบ</span></div>
+        <div class="grid g2">${personField('duty.contact', 'ชื่อผู้จัดทำ', o.duty.contact)}
+          <label class="field"><span>เบอร์ติดต่อ</span><input data-bind="duty.contact.phone" value="${esc(o.duty.contact.phone)}" inputmode="tel" placeholder="08x-xxx-xxxx"></label></div>
+      </section>
+      <section class="card">
         <div class="card-head"><h2>ข้อมูลเวรและผู้รับผิดชอบ</h2></div>
         <div class="grid g3">${DUTY_SINGLE.map(([k, l]) => personField('duty.' + k, l, o.duty[k])).join('')}</div>
         <div class="grid g2" style="margin-top:12px">${multiField('schedulers')}${multiField('documents')}</div>
         <div class="grid g2" style="margin-top:12px">
           <label class="field"><span>น.ควบคุมการถ่าย ชพ. (เลือกจาก น.เอกสาร)</span><select data-bind="duty.refuelIdx" data-refuel>${refuelOptions()}</select></label>
-          ${personField('duty.contact', 'น.จัดบิน (ติดต่อ)', o.duty.contact, { phone: true })}
         </div>
       </section>
       <section class="card">
@@ -736,7 +760,8 @@
     const missions = o.noMission ? '<div class="d-none">— ไม่มีภารกิจ —</div>' : o.missions.map((x, i) => {
       const crew = x.crew.map((c, n) => `<div>${n + 1}. ${c.role ? '<b>' + esc(c.role) + '</b> ' : ''}${esc(c.name)}</div>`).join('');
       const t = x.times;
-      const times = [['Brief', t.brief], [t.towMode === 'taxi' ? 'TAXI' : 'ลาก', t.tow], ['วิ่งขึ้น', t.takeoff]].filter(a => a[1]).map(a => esc(a[0]) + ' <b>' + esc(a[1]) + '</b>').join(' &nbsp;·&nbsp; ');
+      const times = [['Brief', t.brief], [t.towMode === 'taxi' ? 'TAXI' : 'ลาก', t.tow], [/^\s*วิ่งขึ้น/.test(t.takeoff) ? '' : 'วิ่งขึ้น', t.takeoff]]
+        .filter(a => a[1]).map(a => (a[0] ? esc(a[0]) + ' ' : '') + '<b>' + esc(a[1]) + '</b>').join(' &nbsp;·&nbsp; ');
       const park = [['ขาไป', x.parking.out], ['ขากลับ', x.parking.ret]].filter(a => a[1]).map(a => esc(a[0]) + ': ' + esc(a[1])).join(' &nbsp;·&nbsp; ');
       const pair = x.pairLabel || x.pairTail || '—';
       const role = x.acRole === 'primary' ? '<b>บ.จริง</b> — บ.สำรอง: ' + esc(pair) : x.acRole === 'spare' ? '<b>บ.สำรอง</b> ของ บ.จริง: ' + esc(pair) : '';
@@ -755,10 +780,10 @@
       <div class="d-date">${esc(thaiDate(day.date))}</div>
       <div class="d-sec">ข้อมูลเวรและผู้รับผิดชอบ</div>
       <table><tbody>
+        <tr><td class="l">ผู้จัดทำใบจัดบิน (ติดต่อ)</td><td colspan="3">${nm(d.contact)}${d.contact.phone ? ' | โทร. ' + esc(d.contact.phone) : ''}</td></tr>
         <tr><td class="l">น.เวรกองบิน 6</td><td>${nm(d.wingDuty)}</td><td class="l">ผช.น.เวร กองบิน 6</td><td>${nm(d.wingDutyAsst)}</td></tr>
-        <tr><td class="l">น.เวร Controller</td><td>${nm(d.controller)}</td><td class="l">น.จัดบิน</td><td>${names(d.schedulers)}</td></tr>
+        <tr><td class="l">น.เวร Controller</td><td>${nm(d.controller)}</td><td class="l">น.จัดบินเวรวันถัดไป<br><span style="font-weight:400">(${esc(dayShort(addDays(day.date, 1)))})</span></td><td>${names(d.schedulers)}</td></tr>
         <tr><td class="l">น.เอกสาร</td><td>${names(d.documents)}</td><td class="l">น.ควบคุมการถ่าย ชพ.</td><td>${refuel}</td></tr>
-        <tr><td class="l">น.จัดบิน (ติดต่อ)</td><td colspan="3">${nm(d.contact)}${d.contact.phone ? ' | ' + esc(d.contact.phone) : ''}</td></tr>
       </tbody></table>
       ${stbyOn.length ? `<div class="d-sec">นบ.STBY</div><table><tbody>${stbyOn.map(([k, label]) => `<tr><td class="l" style="width:30%">${esc(label)}</td>
         <td>${o.standby[k].pilots.filter(p => p.name).map((p, j) => (j + 1) + '. ' + esc(p.name)).join(' &nbsp;&nbsp; ') || '—'}</td></tr>`).join('')}</tbody></table>` : ''}
@@ -1220,6 +1245,7 @@
       setPath(S.order, t.dataset.bind, t.value);
       const m = t.dataset.bind.match(/^(.+)\.name$/);
       if (m) { const parent = getPath(S.order, m[1]); if (parent && 'id' in parent) parent.id = ''; }
+      if (t.dataset.bind === 'duty.contact.phone' && S.user) { try { localStorage.setItem('fo602_phone_' + S.user.username, t.value); } catch (e2) { /* ignore */ } }
       if (/\.(director|acCommander)\.(name|position|phone)$/.test(t.dataset.bind)) t.closest('.field').classList.toggle('missing', !t.value.trim());   // พิมพ์ชื่อเอง → ไม่ผูกกับรหัสในฐานข้อมูล
       markDirty();
     } else if (t.dataset.hol && holEdit) {
@@ -1234,6 +1260,16 @@
       let v = t.value.trim().replace(/[.:]/g, '');
       if (/^\d{3}$/.test(v)) v = '0' + v;
       if (/^\d{4}$/.test(v)) { t.value = v; setPath(S.order, t.dataset.bind, v); markDirty(); }
+    }
+    if (t.dataset.parking && S.order) {
+      const path = t.dataset.parking;
+      if (t.value === '__other') {
+        parkingOther.add(S.date + '|' + path);
+        if (PARKING.includes(getPath(S.order, path))) setPath(S.order, path, '');
+      } else { parkingOther.delete(S.date + '|' + path); setPath(S.order, path, t.value); }
+      markDirty(); renderView();
+      if (t.value === '__other') { const el = document.querySelector(`input[data-bind="${path}"]`); if (el) el.focus(); }
+      return;
     }
     if (t.dataset.bool && S.order) {
       setPath(S.order, t.dataset.bool, t.checked); markDirty(); renderView(); return;
