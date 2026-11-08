@@ -74,6 +74,8 @@
     call,
     demoUsers: async () => (await demoBackend()).users,
     demoReset: async () => { (await demoBackend()).reset(); },
+    demoSimulateLine: async (text, userId) => (await demoBackend()).simulateLine(text, userId),
+    demoLineLog: async () => (await demoBackend()).lineLog(),
   };
   window.API = API;
 })();
