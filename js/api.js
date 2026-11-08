@@ -5,6 +5,7 @@
   const params = new URLSearchParams(location.search);
   const DEMO = !cfg.API_URL || params.get('demo') === '1';
   const TOKEN_KEY = DEMO ? 'fo602_demo_token' : 'fo602_token';
+  const TIMEOUT_MS = 60000;   // ไม่ให้หมุนค้างไม่มีกำหนด (Apps Script ทำงานได้สูงสุด 6 นาที)
 
   class ApiError extends Error {
     constructor(code, message, extra) { super(message); this.code = code; this.extra = extra; }
@@ -35,21 +36,26 @@
     let res;
     if (DEMO) {
       const be = await demoBackend();
-      await new Promise(r => setTimeout(r, 120));          // จำลองเวลารอเครือข่าย
+      // จำลองเวลารอเครือข่าย (ทดสอบเน็ตช้าได้ด้วย localStorage fo602_demo_latency = มิลลิวินาที)
+      await new Promise(r => setTimeout(r, Number(localStorage.getItem('fo602_demo_latency')) || 120));
       res = be.call(body);
     } else {
-      let r;
+      let r, text;
+      const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const timer = ctrl ? setTimeout(() => ctrl.abort(), TIMEOUT_MS) : null;
       try {
         r = await fetch(cfg.API_URL, {
           method: 'POST',
           headers: { 'Content-Type': 'text/plain;charset=utf-8' },  // simple request → ไม่มี CORS preflight
           body: JSON.stringify(body),
           redirect: 'follow',
+          signal: ctrl ? ctrl.signal : undefined,
         });
+        text = await r.text();
       } catch (e) {
+        if (e && e.name === 'AbortError') throw new ApiError('TIMEOUT', 'เซิร์ฟเวอร์ไม่ตอบภายใน ' + (TIMEOUT_MS / 1000) + ' วินาที');
         throw new ApiError('NETWORK', 'เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ ตรวจสอบอินเทอร์เน็ตแล้วลองใหม่');
-      }
-      const text = await r.text();
+      } finally { if (timer) clearTimeout(timer); }
       try { res = JSON.parse(text); }
       catch (e) { throw new ApiError('SERVER', 'เซิร์ฟเวอร์ตอบกลับผิดรูปแบบ (ตรวจการ Deploy ว่าตั้ง Who has access = Anyone)'); }
     }
