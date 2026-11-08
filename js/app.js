@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  const APP_VERSION = '1.5.1';   // ให้ตรงกับ VERSION ใน sw.js
+  const APP_VERSION = '1.6.0';   // ให้ตรงกับ VERSION ใน sw.js
 
   // ───────────────────────── Constants ─────────────────────────
   const ROLE_LABEL = { admin: 'ผู้ดูแลระบบ', scheduler: 'ผู้จัดบิน', commander: 'ผู้บังคับบัญชา', documents: 'ผู้ดูแลเอกสาร', viewer: 'ผู้ชม' };
@@ -10,7 +10,7 @@
   const CAN = {
     editOrder: ['admin', 'scheduler'], release: ['admin', 'scheduler'], editAircraft: ['admin', 'scheduler'],
     approve: ['admin', 'commander'], seeUnreleased: ['admin', 'scheduler', 'commander', 'documents'],
-    manageUsers: ['admin'], settings: ['admin'], deleteOrder: ['admin'],
+    manageUsers: ['admin'], settings: ['admin'], deleteOrder: ['admin'], managePilots: ['admin', 'scheduler'],
   };
   const DUTY_SINGLE = [['wingDuty', 'น.เวรกองบิน 6'], ['wingDutyAsst', 'ผช.น.เวร กองบิน 6'], ['controller', 'น.เวร Controller']];
   const DUTY_MULTI = { schedulers: ['น.จัดบินประจำวัน', 2], documents: ['น.เอกสาร', 3] };
@@ -367,6 +367,7 @@
   // ───────────────────────── Shell ─────────────────────────
   function tabsFor() {
     const t = [['order', '📋', 'ใบจัดบิน'], ['aircraft', '✈️', 'สถานภาพ บ.'], ['history', '🗂️', 'ย้อนหลัง'], ['stats', '📊', 'สถิติ']];
+    if (can('managePilots')) t.push(['pilots', '👨‍✈️', 'นักบิน']);
     if (can('manageUsers')) t.push(['users', '👥', 'ผู้ใช้']);
     if (can('settings')) t.push(['settings', '⚙️', 'ตั้งค่า']);
     return t;
@@ -401,7 +402,7 @@
   function renderView() {
     const v = $('#view'); if (!v) return;
     document.querySelectorAll('.tabs button').forEach(b => { b.classList.toggle('active', b.dataset.tab === S.tab); b.setAttribute('aria-selected', b.dataset.tab === S.tab); });
-    ({ order: viewOrder, aircraft: viewAircraft, history: viewHistory, stats: viewStats, users: viewUsers, settings: viewSettings }[S.tab] || viewOrder)(v);
+    ({ order: viewOrder, aircraft: viewAircraft, history: viewHistory, stats: viewStats, users: viewUsers, settings: viewSettings, pilots: viewPilots }[S.tab] || viewOrder)(v);
   }
 
   // ───────────────────────── Order view ─────────────────────────
@@ -891,6 +892,7 @@
       const t = el.dataset.tab;
       if (S.tab === 'aircraft' && S.acEdit && t !== 'aircraft' && !(await confirmBox('ยกเลิกการแก้ไข', 'ยังไม่ได้บันทึกสถานภาพเครื่องบิน ต้องการออกจากหน้านี้หรือไม่?', 'ออก', 'bad'))) return;
       if (t !== 'aircraft') S.acEdit = null;
+      if (t === 'pilots') S.pilotsFresh = false;
       S.tab = t; renderView(); window.scrollTo(0, 0);
     },
     day: el => {
@@ -1171,6 +1173,99 @@
     if (s.from > s.to) { toast('ช่วงวันที่ไม่ถูกต้อง', true); return; }
     try { s.data = await api('stats', { from: s.from, to: s.to }); drawStats(); } catch (e) { /* toasted */ }
   };
+
+  // ───────────────────────── Pilots tab (admin, scheduler) — แก้ไขลง CRM602 ─────────────────────────
+  const RANKS = ['น.อ.', 'น.ท.', 'น.ต.', 'ร.อ.', 'ร.ท.', 'ร.ต.', 'น.อ.หญิง', 'น.ท.หญิง', 'น.ต.หญิง', 'ร.อ.หญิง', 'ร.ท.หญิง', 'ร.ต.หญิง'];
+  function shortName(rank, first, last) {     // ต้องตรงกับ shortName_ ใน Code.gs
+    const initial = String(last || '').replace(/^[เแโใไ]+/, '').charAt(0);
+    const r = String(rank || '').trim();
+    const sep = !r || /\.$/.test(r) ? '' : ' ';
+    return (r + sep + (first || '') + (initial ? ' ' + initial + '.' : '')).trim();
+  }
+  async function viewPilots(v) {
+    const ui = S.pilotUi = S.pilotUi || { q: '', filter: 'active' };
+    v.innerHTML = `<section class="card">
+      <div class="card-head"><h2>รายชื่อนักบิน</h2><span class="spacer"></span>
+        <button class="btn sm ghost" data-act="pilots-reload">↻ โหลดใหม่</button>
+        <button class="btn sm primary" data-act="pilot-new">＋ เพิ่มนักบิน</button></div>
+      <p class="small muted" style="margin-top:0">แก้ไขลง Google Sheets CRM602 (แท็บ Crew) โดยตรง ระบบอื่นที่ใช้ชีตนี้จะเห็นการเปลี่ยนแปลงด้วย ·
+        "ปิดใช้งาน" จะซ่อนจากรายการเลือกชื่อ แต่ไม่ลบข้อมูล (ชั่วโมงบิน/คุณสมบัติ/ประวัติยังอยู่) · ใบจัดบินที่บันทึกไปแล้วยังใช้ชื่อเดิม</p>
+      <div class="row" style="margin-bottom:8px">
+        <input class="input grow" id="plQ" value="${esc(ui.q)}" placeholder="ค้นหา ยศ ชื่อ นามสกุล หรือรหัส" autocomplete="off">
+        <select class="input" id="plF" style="width:auto">
+          <option value="active" ${ui.filter === 'active' ? 'selected' : ''}>ใช้งาน</option>
+          <option value="inactive" ${ui.filter === 'inactive' ? 'selected' : ''}>ปิดใช้งาน</option>
+          <option value="all" ${ui.filter === 'all' ? 'selected' : ''}>ทั้งหมด</option></select>
+      </div>
+      <div id="plList"><p class="muted">กำลังโหลด…</p></div></section>`;
+    $('#plQ').oninput = e => { ui.q = e.target.value; drawPilots(); };
+    $('#plF').onchange = e => { ui.filter = e.target.value; drawPilots(); };
+    if (!S.pilotsFresh) {
+      try { setCrew(await api('getCrew', { refresh: true }, { quiet: true })); S.pilotsFresh = true; } catch (e) { /* toasted */ }
+    }
+    drawPilots();
+  }
+  function drawPilots() {
+    const el = $('#plList'); if (!el) return;
+    const ui = S.pilotUi, q = ui.q.trim().toLowerCase();
+    const all = S.crew.people || [];
+    const rows = all.filter(p => (ui.filter === 'all' || (ui.filter === 'active') === (p.active !== false)) &&
+      (!q || [p.id, p.rank, p.first, p.last, p.short].join(' ').toLowerCase().includes(q)));
+    if (!S.crew.configured && !all.length) { el.innerHTML = '<div class="banner warn">ยังไม่ได้เชื่อม Google Sheets รายชื่อ (ผู้ดูแลระบบตั้งค่าได้ที่แท็บ "ตั้งค่า")</div>'; return; }
+    const nAct = all.filter(p => p.active !== false).length;
+    el.innerHTML = `<p class="small muted" style="margin:0 0 6px">ใช้งาน ${nAct} คน · ปิดใช้งาน ${all.length - nAct} คน · แสดง ${rows.length} คน</p>
+      <div class="tbl-wrap"><table class="tbl cards"><thead><tr><th>รหัส</th><th>ยศ</th><th>ชื่อ</th><th>นามสกุล</th><th>ชื่อในใบจัดบิน</th><th>สถานะ</th><th></th></tr></thead><tbody>
+      ${rows.length ? rows.map(p => `<tr class="${p.active === false ? 'muted' : ''}"><td data-k="รหัส">${esc(p.id)}</td><td data-k="ยศ">${esc(p.rank)}</td>
+        <td data-k="ชื่อ"><b>${esc(p.first)}</b></td><td data-k="นามสกุล">${esc(p.last)}</td><td data-k="ในใบ">${esc(p.short)}</td>
+        <td data-k="สถานะ">${p.active === false ? '<span class="chip DENIED">ปิดใช้งาน</span>' : '<span class="chip APPROVED">ใช้งาน</span>'}</td>
+        <td><div class="row" style="gap:4px;flex-wrap:nowrap"><button class="btn sm ghost" data-act="pilot-edit" data-id="${esc(p.id)}">แก้ไข</button>
+          <button class="btn sm ${p.active === false ? 'ghost' : 'danger-ghost'}" data-act="pilot-toggle" data-id="${esc(p.id)}">${p.active === false ? 'เปิดใช้งาน' : 'ปิดใช้งาน'}</button></div></td></tr>`).join('')
+        : '<tr><td colspan="7" class="muted">ไม่พบรายชื่อ</td></tr>'}</tbody></table></div>`;
+  }
+  async function pilotForm(p) {
+    const isNew = !p.id;
+    return modal({ title: isNew ? 'เพิ่มนักบิน' : 'แก้ไขนักบิน ' + p.id, body: `<div class="grid">
+        <datalist id="rankList">${RANKS.map(r => `<option value="${esc(r)}">`).join('')}</datalist>
+        <label class="field"><span>ยศ</span><input id="pf_rank" list="rankList" value="${esc(p.rank || '')}" placeholder="เช่น ร.อ." ${isNew ? 'autofocus' : ''}></label>
+        <div class="grid g2"><label class="field"><span>ชื่อ</span><input id="pf_first" value="${esc(p.first || '')}"></label>
+          <label class="field"><span>นามสกุล</span><input id="pf_last" value="${esc(p.last || '')}"></label></div>
+        <div class="small">ชื่อที่จะแสดงในใบจัดบิน: <b id="pf_prev">${esc(p.short || '—')}</b></div>
+        <div class="form-error" id="pf_err"></div></div>`,
+      foot: [{ label: 'ยกเลิก', cls: 'ghost', value: null }, { label: isNew ? 'เพิ่มนักบิน' : 'บันทึก', cls: 'primary',
+        validate: bg => {
+          const miss = [['pf_rank', 'ยศ'], ['pf_first', 'ชื่อ'], ['pf_last', 'นามสกุล']].filter(([id]) => !$('#' + id, bg).value.trim()).map(x => x[1]);
+          if (miss.length) $('#pf_err', bg).textContent = 'กรุณากรอก ' + miss.join(', ');
+          return !miss.length;
+        },
+        value: bg => ({ id: p.id || '', rank: $('#pf_rank', bg).value.trim(), first: $('#pf_first', bg).value.trim(), last: $('#pf_last', bg).value.trim() }) }],
+      onOpen: bg => {
+        const upd = () => { $('#pf_prev', bg).textContent = shortName($('#pf_rank', bg).value.trim(), $('#pf_first', bg).value.trim().replace(/\s+/g, ''), $('#pf_last', bg).value.trim()) || '—'; };
+        ['pf_rank', 'pf_first', 'pf_last'].forEach(id => $('#' + id, bg).addEventListener('input', upd));
+      } });
+  }
+  Object.assign(ACTIONS, {
+    'pilots-reload': async () => { setCrew(await api('getCrew', { refresh: true })); drawPilots(); },
+    'pilot-new': async () => {
+      const v = await pilotForm({});
+      if (!v) return;
+      const r = await api('savePilot', { pilot: v });
+      setCrew(r.crew); drawPilots(); toast('เพิ่ม ' + (S.crewById[r.id] ? S.crewById[r.id].short : '') + ' แล้ว (รหัส ' + r.id + ')');
+    },
+    'pilot-edit': async el => {
+      const p = S.crewById[el.dataset.id]; if (!p) return;
+      const v = await pilotForm(p);
+      if (!v) return;
+      const r = await api('savePilot', { pilot: v });
+      setCrew(r.crew); drawPilots(); toast('บันทึกแล้ว');
+    },
+    'pilot-toggle': async el => {
+      const p = S.crewById[el.dataset.id]; if (!p) return;
+      const activate = p.active === false;
+      if (!activate && !(await confirmBox('ปิดใช้งานนักบิน', `ปิดใช้งาน <b>${esc(p.short)}</b> (${esc(p.id)})? — ชื่อจะไม่แสดงในรายการเลือกนักบิน แต่ข้อมูลเดิมยังอยู่ และเปิดใช้งานคืนได้`, 'ปิดใช้งาน', 'bad'))) return;
+      const r = await api('setPilotActive', { id: p.id, active: activate });
+      setCrew(r.crew); drawPilots(); toast((activate ? 'เปิดใช้งาน ' : 'ปิดใช้งาน ') + p.short + ' แล้ว');
+    },
+  });
 
   // ───────────────────────── Users tab (admin) ─────────────────────────
   async function viewUsers(v) {
