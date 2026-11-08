@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  const APP_VERSION = '1.5.0';   // ให้ตรงกับ VERSION ใน sw.js
+  const APP_VERSION = '1.5.1';   // ให้ตรงกับ VERSION ใน sw.js
 
   // ───────────────────────── Constants ─────────────────────────
   const ROLE_LABEL = { admin: 'ผู้ดูแลระบบ', scheduler: 'ผู้จัดบิน', commander: 'ผู้บังคับบัญชา', documents: 'ผู้ดูแลเอกสาร', viewer: 'ผู้ชม' };
@@ -614,6 +614,8 @@
             <option value="">— เลือกเครื่องบิน —</option>
             ${acOpts.map(a => `<option value="${esc(a.tail)}" ${a.tail === m.aircraftTail ? 'selected' : ''}>${esc(aircraftLabel(a))}${a.status && a.status !== 'FMC' ? ' · ' + esc(a.status) : ''}</option>`).join('')}
           </select>
+          <button class="mv" data-act="mission-move" data-m="${i}" data-d="-1" ${i === 0 ? 'disabled' : ''} aria-label="เลื่อนภารกิจที่ ${i + 1} ขึ้น" title="เลื่อนขึ้น">↑</button>
+          <button class="mv" data-act="mission-move" data-m="${i}" data-d="1" ${i === o.missions.length - 1 ? 'disabled' : ''} aria-label="เลื่อนภารกิจที่ ${i + 1} ลง" title="เลื่อนลง">↓</button>
           <button class="x" data-act="mission-rm" data-m="${i}" aria-label="ลบภารกิจที่ ${i + 1}" title="ลบภารกิจนี้">✕</button>
         </div>
         <div class="mission-body">
@@ -989,6 +991,17 @@
     'mission-add': () => {
       S.order.noMission = false; S.order.missions.push(blankMission()); markDirty(); renderView();
       const el = $('#mission-' + (S.order.missions.length - 1)); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    },
+    'mission-move': el => {
+      const i = Number(el.dataset.m), j = i + Number(el.dataset.d), ms = S.order.missions;
+      if (j < 0 || j >= ms.length) return;
+      [ms[i], ms[j]] = [ms[j], ms[i]];
+      markDirty(); renderView();
+      const card = $('#mission-' + j);
+      if (card) {
+        card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        card.classList.add('moved'); setTimeout(() => card.classList.remove('moved'), 900);
+      }
     },
     'mission-rm': async el => {
       const i = Number(el.dataset.m), m = S.order.missions[i];
