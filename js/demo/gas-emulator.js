@@ -109,6 +109,7 @@
       getDataRange() { return new Range(this, 1, 1, Math.max(this.getLastRow(), 1), Math.max(this.getLastColumn(), 1)); },
       appendRow(row) { this._d.splice(this.getLastRow(), 0, row.slice()); persist(); return this; },
       deleteRow(r) { this._d.splice(r - 1, 1); persist(); },
+      deleteRows(r, n) { this._d.splice(r - 1, n); persist(); },
       setFrozenRows() { return this; },
     };
 
@@ -126,6 +127,7 @@
       },
       getDisplayValues() { return this.getValues().map(r => r.map(display)); },
       getValue() { return this.getValues()[0][0]; },
+      getDisplayValue() { return this.getDisplayValues()[0][0]; },
       setValues(vals) {
         const d = this.sheet._d;
         if (vals.length !== this.nr || vals.some(v => v.length !== this.nc)) throw new Error('emulator: setValues size mismatch');
@@ -214,13 +216,35 @@
       ungzip: blob => blob,
     };
 
-    return { SpreadsheetApp, PropertiesService, CacheService, LockService, ContentService, Utilities, store };
+    const triggers = [];
+    const ScriptApp = {   // demo: ไม่มีตัวตั้งเวลาจริง — แท็บสถิติประมวลผลคิวเองก่อนแสดง
+      getProjectTriggers: () => triggers.slice(),
+      deleteTrigger: t => { const i = triggers.indexOf(t); if (i >= 0) triggers.splice(i, 1); },
+      newTrigger(fn) {
+        const t = { getHandlerFunction: () => fn };
+        const b = { timeBased: () => b, everyMinutes: () => b, create: () => { triggers.push(t); return t; } };
+        return b;
+      },
+    };
+    // demo: ไม่ส่งออก LINE จริง — เก็บรายการที่ "ส่ง" ไว้ให้ดู
+    const lineSent = store.lineSent = store.lineSent || [];
+    const UrlFetchApp = {
+      fetch(url, o) {
+        o = o || {};
+        const body = o.payload ? JSON.parse(o.payload) : null;
+        let code = 200, text = '{}';
+        if (/\/v2\/bot\/info$/.test(url)) text = JSON.stringify({ userId: 'Udemobot0000000000000000000000000', basicId: '@demo602', displayName: 'ฝูงบิน 602 (ทดลอง)' });
+        else if (/\/message\/(push|reply)$/.test(url)) { lineSent.push({ at: Date.now(), kind: RegExp.$1, to: body.to || 'reply', text: body.messages.map(m => m.text).join('\n') }); if (lineSent.length > 200) lineSent.splice(0, lineSent.length - 200); persist(); }
+        return { getResponseCode: () => code, getContentText: () => text };
+      },
+    };
+    return { SpreadsheetApp, PropertiesService, CacheService, LockService, ContentService, Utilities, ScriptApp, UrlFetchApp, store };
   }
 
   /** โหลดซอร์ส Code.gs แล้วคืนฟังก์ชันระดับบนสุดที่ต้องใช้ */
   function loadScript(source, env) {
-    const names = ['SpreadsheetApp', 'PropertiesService', 'CacheService', 'LockService', 'ContentService', 'Utilities'];
-    const exportsList = ['doPost', 'doGet', 'setup', 'hashPassword_', 'db_', 'shortName_', 'nextBatch_', 'SHEETS'];
+    const names = ['SpreadsheetApp', 'PropertiesService', 'CacheService', 'LockService', 'ContentService', 'Utilities', 'ScriptApp', 'UrlFetchApp'];
+    const exportsList = ['doPost', 'doGet', 'setup', 'hashPassword_', 'db_', 'shortName_', 'nextBatch_', 'processFlatQueue', 'SHEETS'];
     const body = source + '\n;return {' + exportsList.map(n => n + ': typeof ' + n + ' !== "undefined" ? ' + n + ' : undefined').join(',') +
       ', _resetDbCache: function(){ DB_CACHE_ = null; } };';
     // eslint-disable-next-line no-new-func
