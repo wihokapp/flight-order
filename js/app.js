@@ -2,6 +2,8 @@
 (function () {
   'use strict';
 
+  const APP_VERSION = '1.4.2';   // ให้ตรงกับ VERSION ใน sw.js
+
   // ───────────────────────── Constants ─────────────────────────
   const ROLE_LABEL = { admin: 'ผู้ดูแลระบบ', scheduler: 'ผู้จัดบิน', commander: 'ผู้บังคับบัญชา', documents: 'ผู้ดูแลเอกสาร', viewer: 'ผู้ชม' };
   const STATUS_LABEL = { NEW: 'ยังไม่มีใบจัดบิน', PENDING: 'รอพิจารณา', APPROVED: 'อนุมัติแล้ว', DENIED: 'ไม่อนุมัติ', RELEASED: 'Release แล้ว' };
@@ -374,7 +376,7 @@
         `<button role="tab" data-act="tab" data-tab="${k}" class="${S.tab === k ? 'active' : ''}" aria-selected="${S.tab === k}"><span class="ico" aria-hidden="true">${i}</span>${l}</button>`).join('')}</nav>
       <main class="view" id="view"></main>
       <div class="menu" id="menu" role="menu" hidden>
-        <div class="small muted" style="padding:6px 12px">${esc(u.username)} · ${esc(ROLE_LABEL[u.role])}</div>
+        <div class="small muted" style="padding:6px 12px">${esc(u.username)} · ${esc(ROLE_LABEL[u.role])}<br>เวอร์ชัน ${APP_VERSION}</div>
         <button data-act="change-pw">🔑 เปลี่ยนรหัสผ่าน</button>
         <button data-act="refresh-crew">↻ โหลดรายชื่อนักบินล่าสุด</button>
         ${API.DEMO ? '<button data-act="demo-reset">🧪 รีเซ็ตข้อมูลทดลอง</button>' : ''}
@@ -1278,8 +1280,21 @@
     }
     S.user = null; render();
   }
+  // Service worker + อัปเดตอัตโนมัติ: เมื่อมีเวอร์ชันใหม่จะโหลดหน้าใหม่ให้เอง (ถ้าไม่มีงานที่ยังไม่บันทึก)
   if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
-    navigator.serviceWorker.register('sw.js').catch(() => {});
+    let hadController = !!navigator.serviceWorker.controller;
+    let reloading = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (!hadController) { hadController = true; return; }   // ติดตั้งครั้งแรก ไม่ต้อง reload
+      if (reloading) return;
+      if (S.user && anyDirty()) { toast('มีเวอร์ชันใหม่ — บันทึกงานแล้วกดรีเฟรชหน้า'); return; }
+      reloading = true; location.reload();
+    });
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(reg => {
+      const check = () => reg.update().catch(() => {});
+      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') check(); });
+      setInterval(check, 30 * 60 * 1000);
+    }).catch(() => {});
   }
   window.__fo602 = { S, ACTIONS, nextBatch, setHolidays, loadRange };   // สำหรับ debug/ทดสอบ
   start();
