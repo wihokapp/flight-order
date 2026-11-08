@@ -24,9 +24,14 @@
       demoPromise = (async () => {
         await loadScript('js/demo/gas-emulator.js');
         await loadScript('js/demo/demo-backend.js');
-        const src = await (await fetch('backend/Code.gs', { cache: 'no-cache' })).text();
+        const res = await fetch('backend/Code.gs', { cache: 'no-cache' });
+        const src = res.ok ? await res.text() : '';
+        if (!res.ok || /^\s*</.test(src)) {
+          throw new ApiError('DEMO', 'โหมดทดลองต้องมีไฟล์ backend/Code.gs บนเว็บ — อัปโหลด Code.gs ไว้ในโฟลเดอร์ backend/ ของ repo (ระบบจริงที่ตั้ง API_URL แล้วไม่ต้องใช้ไฟล์นี้)');
+        }
         return window.DemoBackend.createDemoBackend(src);
       })();
+      demoPromise.catch(() => { demoPromise = null; });   // ให้ลองใหม่ได้
     }
     return demoPromise;
   }
