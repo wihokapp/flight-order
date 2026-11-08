@@ -2,18 +2,18 @@
 (function () {
   'use strict';
 
-  const APP_VERSION = '1.4.5';   // ให้ตรงกับ VERSION ใน sw.js
+  const APP_VERSION = '1.5.0';   // ให้ตรงกับ VERSION ใน sw.js
 
   // ───────────────────────── Constants ─────────────────────────
   const ROLE_LABEL = { admin: 'ผู้ดูแลระบบ', scheduler: 'ผู้จัดบิน', commander: 'ผู้บังคับบัญชา', documents: 'ผู้ดูแลเอกสาร', viewer: 'ผู้ชม' };
-  const STATUS_LABEL = { NEW: 'ยังไม่มีใบจัดบิน', PENDING: 'รอพิจารณา', APPROVED: 'อนุมัติแล้ว', DENIED: 'ไม่อนุมัติ', RELEASED: 'Release แล้ว' };
+  const STATUS_LABEL = { NEW: 'ยังไม่มีใบจัดบิน', DRAFT: 'ร่าง (กำลังจัดทำ)', PENDING: 'ขออนุมัติแล้ว · รอพิจารณา', APPROVED: 'อนุมัติแล้ว', DENIED: 'ไม่อนุมัติ', RELEASED: 'Release แล้ว' };
   const CAN = {
     editOrder: ['admin', 'scheduler'], release: ['admin', 'scheduler'], editAircraft: ['admin', 'scheduler'],
     approve: ['admin', 'commander'], seeUnreleased: ['admin', 'scheduler', 'commander', 'documents'],
     manageUsers: ['admin'], settings: ['admin'], deleteOrder: ['admin'],
   };
   const DUTY_SINGLE = [['wingDuty', 'น.เวรกองบิน 6'], ['wingDutyAsst', 'ผช.น.เวร กองบิน 6'], ['controller', 'น.เวร Controller']];
-  const DUTY_MULTI = { schedulers: ['น.จัดบินเวรวันถัดไป', 2], documents: ['น.เอกสาร', 3] };
+  const DUTY_MULTI = { schedulers: ['น.จัดบินประจำวัน', 2], documents: ['น.เอกสาร', 3] };
   // จุดจอด บ. — เลือก "อื่น ๆ" แล้วกรอกเองได้ (ตอนพิมพ์แสดงเฉพาะข้อความที่กรอก)
   const PARKING = ['ฝูง.602 บน.6', 'ท่าอากาศยานทหาร 1', 'ท่าอากาศยานทหาร 2', 'N2', 'N23R', 'N18R'];
   const parkingOther = new Set();   // ช่องที่ผู้ใช้เลือก "อื่น ๆ" แต่ยังไม่ได้กรอก
@@ -416,16 +416,17 @@
   }
   /** สรุปสถานะทั้งชุด สำหรับเปิด/ปิดปุ่มระดับชุด */
   function batchInfo() {
-    const days = dayList(), c = { NEW: 0, PENDING: 0, APPROVED: 0, DENIED: 0, RELEASED: 0 };
+    const days = dayList(), c = { NEW: 0, DRAFT: 0, PENDING: 0, APPROVED: 0, DENIED: 0, RELEASED: 0 };
     days.forEach(d => c[statusOf(d)]++);
     const existing = days.filter(d => d.meta && d.meta.exists && !d.meta.hidden);
     return {
       days, c, multi: days.length > 1,
       dirty: days.some(d => d.dirty),
       toSave: days.filter(d => dayEditable(d) && (d.dirty || !(d.meta && d.meta.exists))),
-      approvable: can('approve') && c.NEW === 0 && (c.PENDING + c.DENIED) > 0,
-      deniable: can('approve') && c.NEW === 0 && (c.PENDING + c.APPROVED) > 0,
-      releasable: can('release') && c.NEW === 0 && c.PENDING === 0 && c.DENIED === 0 && c.APPROVED > 0,
+      submittable: can('editOrder') && c.NEW === 0 && (c.DRAFT + c.DENIED) > 0,
+      approvable: can('approve') && c.NEW === 0 && c.DRAFT === 0 && c.PENDING > 0,
+      deniable: can('approve') && c.NEW === 0 && c.DRAFT === 0 && (c.PENDING + c.APPROVED) > 0,
+      releasable: can('release') && c.NEW === 0 && c.DRAFT === 0 && c.PENDING === 0 && c.DENIED === 0 && c.APPROVED > 0,
       items: st => existing.filter(d => st.includes(d.meta.status)).map(d => ({ date: d.date, version: d.meta.version })),
       printable: days.filter(d => d.order && !(d.meta && d.meta.hidden) && (d.meta.exists || d.dirty)),
     };
@@ -436,9 +437,18 @@
     const sfx = b.multi ? 'ทั้งชุด' : '';
     const summary = Object.keys(b.c).filter(k => b.c[k]).map(k => `<span class="chip ${k}">${esc(STATUS_LABEL[k])} ${b.multi ? b.c[k] : ''}</span>`).join(' ');
     let batchBanner = '';
-    if (b.multi && can('approve') && b.c.NEW) batchBanner = `<div class="banner warn">ยังมี ${b.c.NEW} วันในชุดที่ยังไม่ได้สร้างใบจัดบิน จึงยังอนุมัติทั้งชุดไม่ได้</div>`;
-    else if (can('approve') && !can('editOrder') && b.c.PENDING) batchBanner = `<div class="banner warn">${b.multi ? 'ชุดใบจัดบินนี้' : 'ใบจัดบินนี้'}รอการพิจารณาของท่าน</div>`;
-    if (b.multi && can('release') && b.c.APPROVED && !b.releasable && b.c.NEW + b.c.PENDING + b.c.DENIED) {
+    const thing = b.multi ? 'ชุดใบจัดบินนี้' : 'ใบจัดบินนี้';
+    if (can('approve') && !can('editOrder') && (b.c.DRAFT || b.c.NEW)) {
+      batchBanner = `<div class="banner warn">${thing}ผู้จัดบินยังจัดทำไม่เสร็จ${b.multi ? ` (${b.c.DRAFT + b.c.NEW} วัน)` : ''} — จะพิจารณาได้เมื่อผู้จัดบินกด "ส่งขออนุมัติ"</div>`;
+    } else if (can('approve') && !can('editOrder') && b.c.PENDING) {
+      batchBanner = `<div class="banner warn">${thing}ส่งขออนุมัติแล้ว รอการพิจารณาของท่าน</div>`;
+    }
+    if (can('editOrder') && b.c.DRAFT + b.c.DENIED) {
+      batchBanner += `<div class="banner info">${thing}ยังเป็นร่าง — ผู้บังคับบัญชาจะพิจารณาได้เมื่อกด <b>📨 ส่งขออนุมัติ</b>${b.c.NEW ? ` (ต้องบันทึกให้ครบทุกวันก่อน)` : ''}</div>`;
+    } else if (can('editOrder') && b.c.PENDING && !b.c.APPROVED) {
+      batchBanner += `<div class="banner info">ส่งขออนุมัติแล้ว — รอผู้บังคับบัญชาพิจารณา (ถ้าแก้ไขอีก จะกลับเป็นร่างและต้องส่งใหม่)</div>`;
+    }
+    if (b.multi && can('release') && b.c.APPROVED && !b.releasable && b.c.NEW + b.c.DRAFT + b.c.PENDING + b.c.DENIED) {
       batchBanner += `<div class="banner info">Release ทั้งชุดได้เมื่อทุกวันในชุดได้รับอนุมัติแล้ว</div>`;
     }
 
@@ -448,6 +458,7 @@
     }
     if (b.printable.length) actions.push(`<button class="btn ghost" data-act="print-all">🖨️ พิมพ์ / PDF${b.multi ? ' (' + b.printable.length + ' วัน)' : ''}</button>`);
     actions.push('<span class="sep"></span>');
+    if (b.submittable) actions.push(`<button class="btn rel" data-act="submit">📨 ส่งขออนุมัติ${sfx}</button>`);
     if (b.approvable) actions.push(`<button class="btn ok" data-act="approve">✔ อนุมัติ${sfx}</button>`);
     if (b.deniable) actions.push(`<button class="btn bad" data-act="deny">✖ ไม่อนุมัติ${sfx}</button>`);
     if (b.releasable) actions.push(`<button class="btn rel" data-act="release">🚀 Release${sfx}</button>`);
@@ -514,7 +525,7 @@
   function activeDay() { return { date: S.date, order: S.order, meta: S.meta, dirty: S.dirty }; }
 
   function logHtml(log) {
-    const L = { create: 'สร้าง', edit: 'แก้ไข', approve: 'อนุมัติ', deny: 'ไม่อนุมัติ', release: 'Release', revise: 'เปิดแก้ไข' };
+    const L = { create: 'สร้าง', edit: 'แก้ไข', submit: 'ส่งขออนุมัติ', approve: 'อนุมัติ', deny: 'ไม่อนุมัติ', release: 'Release', revise: 'เปิดแก้ไข' };
     return `<section class="card"><details><summary class="card-head" style="cursor:pointer;margin:0"><h2>ประวัติการดำเนินการของวันนี้ (${log.length})</h2></summary>
       <ul class="log" style="margin-top:8px">${log.slice().reverse().map(l => `<li><span class="muted">${esc(thaiTs(l.at))}</span>
       <span><b>${esc(L[l.action] || l.action)}</b> · ${esc(l.by)}${l.note ? ' — ' + esc(l.note) : ''}</span></li>`).join('')}</ul></details></section>`;
@@ -531,7 +542,7 @@
   }
   function multiField(key) {
     const [label, max] = DUTY_MULTI[key], list = S.order.duty[key];
-    const hint = key === 'schedulers' ? `<div class="small muted">เข้าเวร${esc(thaiDate(addDays(S.date, 1)))} — ไม่ต้องใส่เบอร์</div>` : '';
+    const hint = key === 'schedulers' ? `<div class="small muted">เข้าเวรตามวันที่ของใบจัดบินนี้ (${esc(thaiDate(S.date))}) — ไม่ต้องใส่เบอร์</div>` : '';
     return `<div class="multi"><div class="multi-head"><b>${esc(label)}</b> <span class="muted small">(สูงสุด ${max} คน)</span>${hint}</div>
       ${list.map((p, i) => personField(`duty.${key}.${i}`, label + ' คนที่ ' + (i + 1), p, { rm: list.length > 1 ? [`duty.${key}`, i] : null })).join('')}
       ${list.length < max ? `<button class="btn sm ghost" data-act="person-add" data-list="duty.${key}" data-max="${max}">＋ เพิ่ม${esc(label)}</button>` : ''}</div>`;
@@ -657,7 +668,7 @@
 
     return `
       <section class="card">
-        <div class="card-head"><h2>ผู้จัดทำใบจัดบิน (ติดต่อ)</h2><span class="muted small">น.จัดบินที่ทำใบนี้ — ชื่อและเบอร์จะแสดงเป็นผู้ติดต่อในใบ</span></div>
+        <div class="card-head"><h2>น.จัดบินผู้จัดทำใบ (ติดต่อ)</h2><span class="muted small">น.จัดบินที่เข้าเวรในวันที่จัดทำใบนี้ — ชื่อและเบอร์แสดงเป็นผู้ติดต่อในใบ</span></div>
         <div class="grid g2">${personField('duty.contact', 'ชื่อผู้จัดทำ', o.duty.contact)}
           <label class="field"><span>เบอร์ติดต่อ</span><input data-bind="duty.contact.phone" value="${esc(o.duty.contact.phone)}" inputmode="tel" placeholder="08x-xxx-xxxx"></label></div>
       </section>
@@ -753,7 +764,7 @@
     const names = arr => (arr || []).filter(p => p.name).map(p => esc(p.name)).join(', ') || '—';
     const ri = Number(d.refuelIdx);
     const refuel = ri >= 0 && d.documents[ri] && d.documents[ri].name ? esc(d.documents[ri].name) : '—';
-    const stamp = st === 'RELEASED' ? 'RELEASED · Rev.' + m.revision : st === 'APPROVED' ? 'อนุมัติแล้ว · ยังไม่ release' : st === 'DENIED' ? 'ไม่อนุมัติ' : 'ร่าง · รอพิจารณา';
+    const stamp = st === 'RELEASED' ? 'RELEASED · Rev.' + m.revision : st === 'APPROVED' ? 'อนุมัติแล้ว · ยังไม่ release' : st === 'DENIED' ? 'ไม่อนุมัติ' : st === 'PENDING' ? 'ขออนุมัติ · รอพิจารณา' : 'ร่าง · ยังไม่ขออนุมัติ';
     const row = (l, v, raw) => (v == null || v === '' ? '' : `<tr><td class="l">${esc(l)}</td><td class="${raw ? 'pre' : ''}">${raw ? esc(v) : v}</td></tr>`);
     const vip = v => (v && v.on ? `${esc(v.name)}${v.position ? ' · ' + esc(v.position) : ''}${v.phone ? ' · โทร. ' + esc(v.phone) : ''}` : '');
     const stbyOn = STBY_TYPES.filter(([k]) => o.standby[k] && o.standby[k].on);
@@ -773,16 +784,16 @@
         ${row('นักบิน', crew ? `<div class="d-crew">${crew}</div>` : '')}${row('POC', esc(x.poc))}${row('การแต่งกาย', esc(x.dress))}${row('หมายเหตุ', x.notes, true)}
         </tbody></table></div>`;
     }).join('');
-    const apprStatus = { NEW: 'ยังไม่บันทึก', PENDING: 'PENDING — รอพิจารณา', APPROVED: 'APPROVED — อนุมัติ', DENIED: 'DENIED — ไม่อนุมัติ', RELEASED: 'APPROVED — อนุมัติ / RELEASED' }[st];
+    const apprStatus = { NEW: 'ยังไม่บันทึก', DRAFT: 'ร่าง — ยังไม่ส่งขออนุมัติ', PENDING: 'PENDING — รอพิจารณา', APPROVED: 'APPROVED — อนุมัติ', DENIED: 'DENIED — ไม่อนุมัติ', RELEASED: 'APPROVED — อนุมัติ / RELEASED' }[st];
     return `<div class="doc">
       <div class="d-stamp ${st}">${esc(stamp)}</div>
       <div class="d-title">${esc(S.settings.unitTitle || o.title)}</div>
       <div class="d-date">${esc(thaiDate(day.date))}</div>
       <div class="d-sec">ข้อมูลเวรและผู้รับผิดชอบ</div>
       <table><tbody>
-        <tr><td class="l">ผู้จัดทำใบจัดบิน (ติดต่อ)</td><td colspan="3">${nm(d.contact)}${d.contact.phone ? ' | โทร. ' + esc(d.contact.phone) : ''}</td></tr>
+        <tr><td class="l">น.จัดบินผู้จัดทำ (ติดต่อ)</td><td colspan="3">${nm(d.contact)}${d.contact.phone ? ' | โทร. ' + esc(d.contact.phone) : ''}</td></tr>
         <tr><td class="l">น.เวรกองบิน 6</td><td>${nm(d.wingDuty)}</td><td class="l">ผช.น.เวร กองบิน 6</td><td>${nm(d.wingDutyAsst)}</td></tr>
-        <tr><td class="l">น.เวร Controller</td><td>${nm(d.controller)}</td><td class="l">น.จัดบินเวรวันถัดไป<br><span style="font-weight:400">(${esc(dayShort(addDays(day.date, 1)))})</span></td><td>${names(d.schedulers)}</td></tr>
+        <tr><td class="l">น.เวร Controller</td><td>${nm(d.controller)}</td><td class="l">น.จัดบินประจำวัน</td><td>${names(d.schedulers)}</td></tr>
         <tr><td class="l">น.เอกสาร</td><td>${names(d.documents)}</td><td class="l">น.ควบคุมการถ่าย ชพ.</td><td>${refuel}</td></tr>
       </tbody></table>
       ${stbyOn.length ? `<div class="d-sec">นบ.STBY</div><table><tbody>${stbyOn.map(([k, label]) => `<tr><td class="l" style="width:30%">${esc(label)}</td>
@@ -815,9 +826,9 @@
 
   // ───── Order actions ─────
   async function gotoDate(d) { await loadRange(d, d, d); }
-  async function saveAll() {
+  async function saveAll(quiet) {
     const b = batchInfo();
-    if (!b.toSave.length) { toast('ไม่มีการเปลี่ยนแปลงที่ต้องบันทึก'); return; }
+    if (!b.toSave.length) { if (!quiet) toast('ไม่มีการเปลี่ยนแปลงที่ต้องบันทึก'); return true; }
     for (const d of b.toSave) {                // ผอ.เดินทาง / ผู้บังคับ บ. ที่ติ๊กไว้ ต้องกรอกครบ
       const bad = [];
       (d.order.noMission ? [] : d.order.missions).forEach((m, i) => [['director', 'ผอ.เดินทาง'], ['acCommander', 'ผู้บังคับ บ.']].forEach(([k, l]) => {
@@ -827,7 +838,7 @@
         if (d.date !== S.date) activate(d.date);
         renderView();
         toast(dayShort(d.date) + ' — กรอกชื่อ ตำแหน่ง เบอร์โทร. ให้ครบ (' + bad.join(', ') + ')', true);
-        return;
+        return false;
       }
       d.order.title = S.settings.unitTitle;     // หัวเรื่องคงที่ตามการตั้งค่า
     }
@@ -839,14 +850,36 @@
       b.toSave.forEach(d => clearDraft(d.date));
       r.days.forEach(putDay);
       renderView();
-      toast(b.multi ? 'บันทึกแล้ว ' + b.toSave.length + ' วัน — รอพิจารณา' : 'บันทึกแล้ว — สถานะ: ' + STATUS_LABEL[statusOf(S.days[S.date])]);
+      if (!quiet) toast('บันทึกร่างแล้ว' + (b.multi ? ' ' + b.toSave.length + ' วัน' : '') + ' — กด "ส่งขออนุมัติ" เมื่อจัดทำเสร็จ');
+      return true;
     } catch (e) {
       if (e.code === 'CONFLICT' || e.code === 'LOCKED') {
         const go = await modal({ title: 'มีผู้อื่นแก้ไขใบจัดบิน', body: `<p>${esc(e.message)}</p><p>ยังไม่มีวันใดถูกบันทึก ร่างของคุณถูกเก็บไว้ในเครื่องนี้ — โหลดใหม่แล้วกด "กู้คืนร่าง" ในแต่ละวันเพื่อเทียบได้</p>`,
           foot: [{ label: 'ยกเลิก', cls: 'ghost', value: false }, { label: 'โหลดใหม่', cls: 'primary', value: true }] });
         if (go) await reloadRange();
       } else toast(e.message, true);
+      return false;
     }
+  }
+  /** สิ่งที่น่าจะยังไม่เสร็จ — แสดงเตือนก่อนส่งขออนุมัติ (ส่งต่อได้) */
+  function incompleteList(days) {
+    const out = [];
+    days.forEach(d => {
+      const o = d.order; if (!o) return;
+      const w = [];
+      if (!o.duty.contact.name) w.push('ยังไม่มีชื่อ น.จัดบินผู้จัดทำ');
+      if (!o.noMission) o.missions.forEach((m, i) => {
+        const miss = [];
+        if (!m.aircraftTail) miss.push('เครื่องบิน');
+        if (!m.title.trim()) miss.push('ภารกิจ');
+        if (!m.crew.length) miss.push('นักบิน');
+        else if (m.crew.some(c => !c.role)) miss.push('หน้าที่นักบิน');
+        if (!m.times.takeoff.trim()) miss.push('เวลาวิ่งขึ้น');
+        if (miss.length) w.push('ภารกิจที่ ' + (i + 1) + ' ยังไม่มี' + miss.join(', '));
+      });
+      if (w.length) out.push('<b>' + esc(dayShort(d.date)) + '</b>: ' + w.map(esc).join(' · '));
+    });
+    return out;
   }
   function requireSaved() { if (batchInfo().dirty) { toast('กรุณาบันทึกการแก้ไขก่อน', true); return false; } return true; }
   async function applyBatch(r, msg) { r.days.forEach(putDay); renderView(); toast(msg); }
@@ -865,7 +898,21 @@
     today: () => gotoDate(S.today || todayKey()),
     'next-batch': () => { const nb = nextBatch(S.today || todayKey()); return loadRange(nb.from, nb.to, nb.from); },
     'day-tab': el => { activate(el.dataset.d); renderView(); },
-    save: saveAll,
+    save: () => saveAll(),
+    submit: async () => {
+      if (batchInfo().dirty && !(await saveAll(true))) return;   // บันทึกก่อนส่ง
+      const b = batchInfo();
+      if (!b.submittable) { toast('ต้องบันทึกใบจัดบินให้ครบทุกวันก่อนส่งขออนุมัติ', true); return; }
+      const items = b.items(['DRAFT', 'DENIED']), warn = incompleteList(b.days.filter(d => ['DRAFT', 'DENIED'].includes(statusOf(d))));
+      const note = await modal({ title: 'ส่งขออนุมัติ' + (b.multi ? 'ทั้งชุด' : ''), body: `<p>ส่งใบจัดบิน <b>${esc(rangeLabel())}</b> ให้ผู้บังคับบัญชาพิจารณา</p>
+        ${warn.length ? `<div class="banner warn" style="margin-top:0"><b>ตรวจก่อนส่ง — รายการที่ยังว่าง:</b><ul class="small" style="margin:6px 0 0;padding-left:18px">${warn.map(w => '<li>' + w + '</li>').join('')}</ul></div>` : ''}
+        <p class="small muted">หลังส่งแล้ว ถ้าแก้ไขอีก ใบจะกลับเป็นร่างและต้องส่งขออนุมัติใหม่</p>
+        <label class="field"><span>ข้อความถึงผู้บังคับบัญชา (ถ้ามี)</span><textarea id="sbNote" rows="2"></textarea></label>`,
+        foot: [{ label: 'ยกเลิก', cls: 'ghost', value: null }, { label: '📨 ส่งขออนุมัติ', cls: 'rel', value: bg => $('#sbNote', bg).value }] });
+      if (note == null) return;
+      try { await applyBatch(await api('submitBatch', { items, note }, { silent: true }), 'ส่งขออนุมัติแล้ว'); }
+      catch (e) { conflictOr(e); }
+    },
     blank: async () => {
       if (!(await confirmBox('ล้างเป็นหน้าว่าง', 'ล้างข้อมูลของ' + esc(thaiDate(S.date)) + 'ให้เป็นใบว่าง (ยังไม่บันทึกจนกว่าจะกด "บันทึก")', 'ล้างข้อมูล', 'bad'))) return;
       S.order = blankOrder(); markDirty(); renderView();
@@ -927,7 +974,7 @@
       catch (e) { conflictOr(e); }
     },
     revise: async () => {
-      const reason = await modal({ title: 'เปิดแก้ไข' + thaiDate(S.date), body: `<p>ใบจัดบินวันนี้จะกลับเป็น <b>รอพิจารณา</b> ในฉบับแก้ไขที่ ${S.meta.revision + 1} และต้องได้รับอนุมัติใหม่ก่อน release (วันอื่นในชุดไม่ได้รับผลกระทบ)</p>
+      const reason = await modal({ title: 'เปิดแก้ไข' + thaiDate(S.date), body: `<p>ใบจัดบินวันนี้จะกลับเป็น <b>ร่าง</b> ในฉบับแก้ไขที่ ${S.meta.revision + 1} และต้องได้รับอนุมัติใหม่ก่อน release (วันอื่นในชุดไม่ได้รับผลกระทบ)</p>
         <label class="field"><span>เหตุผลที่ต้องแก้ไข (จำเป็น)</span><textarea id="rvR" rows="3" autofocus></textarea></label><div class="form-error" id="rvE"></div>`,
         foot: [{ label: 'ยกเลิก', cls: 'ghost', value: null }, { label: 'เปิดแก้ไข', cls: 'primary', value: bg => $('#rvR', bg).value.trim(),
           validate: bg => { const ok = !!$('#rvR', bg).value.trim(); if (!ok) $('#rvE', bg).textContent = 'กรุณาระบุเหตุผล'; return ok; } }] });
