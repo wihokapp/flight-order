@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  const APP_VERSION = '1.8.0';   // ให้ตรงกับ VERSION ใน sw.js
+  const APP_VERSION = '1.8.1';   // ให้ตรงกับ VERSION ใน sw.js
 
   // ───────────────────────── Constants ─────────────────────────
   const ROLE_LABEL = { admin: 'ผู้ดูแลระบบ', scheduler: 'ผู้จัดบิน', commander: 'ผู้บังคับบัญชา', documents: 'ผู้ดูแลเอกสาร', viewer: 'ผู้ชม' };
@@ -486,7 +486,9 @@
       await doLogin(String(fd.get('username')), String(fd.get('password')));
     };
     if (API.DEMO) {
-      const users = await API.demoUsers();
+      let users = [];
+      try { users = await API.demoUsers(); }
+      catch (e) { $('#loginErr').textContent = e.message; return; }
       $('#demoUsers').innerHTML = users.map(u => `<button class="btn sm ghost" data-u="${esc(u.username)}" data-p="${esc(u.password)}">${esc(ROLE_LABEL[u.role])}</button>`).join('');
       $('#demoUsers').onclick = e => { const b = e.target.closest('[data-u]'); if (b) doLogin(b.dataset.u, b.dataset.p); };
     }
