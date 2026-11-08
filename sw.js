@@ -2,7 +2,7 @@
  * - ไม่ cache ข้อมูลจาก API (Apps Script อยู่คนละโดเมน จึงไม่ผ่าน worker นี้)
  * - ขอไฟล์จาก server ใหม่ทุกครั้งเมื่อออนไลน์ (ข้าม HTTP cache 10 นาทีของ GitHub Pages)
  * - เมื่อแก้ไฟล์ใดๆ ให้เพิ่มเลข VERSION (และ APP_VERSION ใน js/app.js ให้ตรงกัน) */
-const VERSION = 'fo602-v1.6.0';
+const VERSION = 'fo602-v1.7.0';
 const SHELL = [
   './', 'index.html', 'css/app.css', 'js/config.js', 'js/api.js', 'js/app.js',
   'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png',
