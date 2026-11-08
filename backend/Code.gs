@@ -555,7 +555,8 @@ function getOrder_(user, date) {
   if (meta.status !== STATUS.RELEASED && !canSeeUnreleased_(user)) {
     return { date: date, exists: true, hidden: true, status: meta.status };
   }
-  return Object.assign(meta, { exists: true, order: unpack_(r[12]), log: safeJson_(r[13], []) });
+  // viewer ไม่เห็นประวัติการดำเนินการ (ชื่อผู้แก้ เหตุผลไม่อนุมัติ ข้อความถึงผู้บังคับบัญชา)
+  return Object.assign(meta, { exists: true, order: unpack_(r[12]), log: user.role === 'viewer' ? [] : safeJson_(r[13], []) });
 }
 
 /** ใบจัดบินหลายวัน (สูงสุด 31 วัน) — ใช้กับชุดวันหยุด */
@@ -1480,7 +1481,7 @@ function buildLineMessages_(type, p) {
         const tm = [['Brief', t.brief], [t.towMode === 'taxi' ? 'TAXI' : 'ลาก', t.tow], [/^\s*วิ่งขึ้น/.test(t.takeoff || '') ? '' : 'วิ่งขึ้น', t.takeoff]]
           .filter(x => x[1]).map(x => (x[0] ? x[0] + ' ' : '') + x[1]);
         if (tm.length) lines.push('เวลา: ' + tm.join(' · '));
-        if (m.dress) lines.push('การแต่งกาย: ' + m.dress);
+        lines.push('การแต่งกาย: ' + (m.dress || 'ไม่ได้ระบุ (สอบถามผู้จัดบิน)'));   // แสดงเสมอ
         (per[c.id] = per[c.id] || []).push(lines.join('\n'));
       }));
       const sb = o.standby || {};
