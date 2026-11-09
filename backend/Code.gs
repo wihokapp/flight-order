@@ -1446,8 +1446,7 @@ function submitters_(dates) {
 function buildLineMessages_(type, p) {
   const dates = (p.dates || []).slice().sort();
   if (!dates.length) return [];
-  const link = appLink_(dates);
-  const tail = link ? '\n\nเปิดใบจัดบิน:\n' + link : '';
+  const tail = '';   // ไม่แนบลิงก์เปิดใบจัดบินในข้อความ LINE
   if (type === 'submit') {
     const text = '📨 มีใบจัดบินส่งขออนุมัติ\n' + rangeTh_(dates) + '\nโดย ' + p.by + (p.note ? '\nข้อความ: ' + p.note : '') + tail;
     return lineRecipients_(usersWithRole_(['commander'])).map(to => ({ to: to, text: text }));
