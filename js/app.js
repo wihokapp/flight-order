@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  const APP_VERSION = '1.9.1';   // ให้ตรงกับ VERSION ใน sw.js
+  const APP_VERSION = '1.9.2';   // ให้ตรงกับ VERSION ใน sw.js
 
   // ───────────────────────── Constants ─────────────────────────
   const ROLE_LABEL = { admin: 'ผู้ดูแลระบบ', scheduler: 'ผู้จัดบิน', commander: 'ผู้บังคับบัญชา', documents: 'ผู้ดูแลเอกสาร', viewer: 'ผู้ชม' };
@@ -987,7 +987,7 @@
         ${two(cell('เวลา', times), cell('เชื้อเพลิง', x.fuel !== '' ? esc(fmtFuel(x.fuel)) + ' TONS' : ''))}
         ${two(cell('จุดจอดขาไป', esc(x.parking.out)), cell('จุดจอดขากลับ', esc(x.parking.ret)))}
         ${two(cell('ผอ.เดินทาง', vip(x.director)), cell('ผู้บังคับ บ.', vip(x.acCommander)))}
-        ${two(x.hospitality && x.hospitality.on ? cell('จัดรับรอง', x.hospitality.detail || 'มี', true) : null, cell('หมายเหตุ', x.notes, true))}
+        ${two(x.hospitality && x.hospitality.on ? cell('จัดรับรอง', x.hospitality.detail || 'มี', true) : cell('จัดรับรอง', 'ไม่มีจัดรับรอง'), cell('หมายเหตุ', x.notes, true))}
         ${full(cell('นักบิน', crew ? `<div class="d-crew">${crew}</div>` : ''))}
         ${two(cell('POC', esc(x.poc)), cell('การแต่งกาย', esc(x.dress)))}
         </tbody></table></div>`;
