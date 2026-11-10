@@ -141,6 +141,7 @@ function route_(req) {
     case 'lineLinks':      return lineLinks_(user);
     case 'lineUnlink':     return lineUnlink_(user, req.key);
     case 'lineTest':       return lineTest_(user);
+    case 'lineTestGroup':  return lineTestGroup_(user);
     case 'savePilot':      return savePilot_(user, req.pilot);
     case 'setPilotActive': return setPilotActive_(user, req.id, req.active);
     case 'getAircraft':    return getAircraft_();
@@ -1213,14 +1214,15 @@ function saveSettings_(user, st) {
 // แจ้งเตือน: release → นักบินในใบ · ส่งขออนุมัติ → ผู้บังคับบัญชา · อนุมัติ/ไม่อนุมัติ → ผู้ที่ส่งขออนุมัติ
 // Channel access token เก็บใน Script Properties เท่านั้น ไม่ส่งกลับไปหน้าเว็บ
 const LINE = {
-  TOKEN_PROP: 'LINE_TOKEN', BOT_PROP: 'LINE_BOT_ID', BASIC_PROP: 'LINE_BASIC_ID', APPURL_PROP: 'APP_URL',
+  TOKEN_PROP: 'LINE_TOKEN', BOT_PROP: 'LINE_BOT_ID', BASIC_PROP: 'LINE_BASIC_ID', APPURL_PROP: 'APP_URL', GROUP_PROP: 'LINE_GROUP_ID',
   CODE_DAYS: 7, MAX_TRIES: 3,
 };
 
 function lineCfg_() {
   const p = PropertiesService.getScriptProperties();
   return { token: p.getProperty(LINE.TOKEN_PROP) || '', botId: p.getProperty(LINE.BOT_PROP) || '',
-           basicId: p.getProperty(LINE.BASIC_PROP) || '', appUrl: p.getProperty(LINE.APPURL_PROP) || '' };
+           basicId: p.getProperty(LINE.BASIC_PROP) || '', appUrl: p.getProperty(LINE.APPURL_PROP) || '',
+           groupId: p.getProperty(LINE.GROUP_PROP) || '' };
 }
 function lineApi_(path, payload, method) {
   const cfg = lineCfg_();
@@ -1238,8 +1240,22 @@ function lineReply_(replyToken, text) {
   try { lineApi_('/v2/bot/message/reply', { replyToken: replyToken, messages: [{ type: 'text', text: String(text).slice(0, 4900) }] }); }
   catch (e) { console.log('[line] reply failed: ' + e.message); }
 }
+/** text = ข้อความเดียว หรือ array (สูงสุด 5 ข้อความต่อครั้ง) */
 function linePush_(to, text) {
-  return lineApi_('/v2/bot/message/push', { to: to, messages: [{ type: 'text', text: String(text).slice(0, 4900) }] });
+  const list = (Array.isArray(text) ? text : [text]).slice(0, 5);
+  return lineApi_('/v2/bot/message/push', { to: to, messages: list.map(t => ({ type: 'text', text: String(t).slice(0, 4900) })) });
+}
+/** แบ่งข้อความยาวเป็นหลายก้อน (LINE จำกัด 5,000 ตัวอักษรต่อข้อความ) โดยตัดที่ขอบ block */
+function chunkText_(header, blocks, footer) {
+  const out = [];
+  let cur = header;
+  blocks.forEach(b => {
+    if ((cur + '\n\n' + b).length > 4600 && cur) { out.push(cur); cur = b; }
+    else cur = cur ? cur + '\n\n' + b : b;
+  });
+  if (footer) { if ((cur + footer).length > 4900) { out.push(cur); cur = footer.trim(); } else cur += footer; }
+  if (cur) out.push(cur);
+  return out.slice(0, 5);
 }
 
 /** key = 'pilot:OPS001' | 'user:username' */
@@ -1336,6 +1352,10 @@ function handleLineWebhook_(body) {
   if (!cfg.token) return { ok: true };
   if (cfg.botId && body.destination && body.destination !== cfg.botId) { console.log('[line] wrong destination'); return { ok: true }; }
   (body.events || []).forEach(ev => {
+    if (ev.type === 'join' && ev.source && ev.source.groupId) {      // เชิญ OA เข้ากลุ่ม → บอก Group ID ไว้ใส่ในหน้าตั้งค่า
+      lineReply_(ev.replyToken, 'สวัสดีครับ 👋 Group ID ของกลุ่มนี้คือ\n' + ev.source.groupId + '\nนำไปใส่ในแอปใบจัดบิน → ตั้งค่า → LINE OA เพื่อรับสรุปใบจัดบินเมื่อ release');
+      return;
+    }
     const uid = ev.source && ev.source.type === 'user' ? ev.source.userId : '';
     if (!uid) return;
     if (ev.type === 'follow') {
@@ -1446,7 +1466,8 @@ function submitters_(dates) {
 function buildLineMessages_(type, p) {
   const dates = (p.dates || []).slice().sort();
   if (!dates.length) return [];
-  const tail = '';   // ไม่แนบลิงก์เปิดใบจัดบินในข้อความ LINE
+  const link = appLink_(dates);
+  const tail = link ? '\n\nเปิดใบจัดบิน:\n' + link : '';
   if (type === 'submit') {
     const text = '📨 มีใบจัดบินส่งขออนุมัติ\n' + rangeTh_(dates) + '\nโดย ' + p.by + (p.note ? '\nข้อความ: ' + p.note : '') + tail;
     return lineRecipients_(usersWithRole_(['commander'])).map(to => ({ to: to, text: text }));
@@ -1490,18 +1511,58 @@ function buildLineMessages_(type, p) {
       });
     });
     const links = lineLinksMap_();
-    return Object.keys(per).map(id => {
+    const out = Object.keys(per).map(id => {
       const l = links['pilot:' + id];
       if (!l || l.status !== 'active') return null;
-      return { to: l.userId, text: '✈️ ใบจัดบิน release แล้ว' + (rev > 1 ? ' (มีการแก้ไข)' : '') + '\n' + rangeTh_(dates) + '\n\n' + per[id].join('\n\n') + tail };
+      return { to: l.userId, text: chunkText_('✈️ ใบจัดบิน release แล้ว' + (rev > 1 ? ' (มีการแก้ไข)' : '') + '\n' + rangeTh_(dates), per[id], tail) };
     }).filter(Boolean);
+    // สรุปทั้งชุดเข้ากลุ่ม LINE (ถ้าตั้ง Group ID ไว้)
+    const gid = lineCfg_().groupId;
+    if (gid) out.push({ to: gid, text: groupReleaseText_(dates, tail) });
+    return out;
   }
   return [];
 }
 
+/** ข้อความสรุปใบจัดบินทั้งชุดสำหรับกลุ่ม LINE: ทุกภารกิจ + นักบิน + STBY */
+function groupReleaseText_(dates, tail) {
+  const sh = db_().getSheetByName('FlightOrders');
+  const blocks = [];
+  let rev = 1;
+  const NUM = ['①', '②', '③', '④', '⑤', '⑥', '⑦', '⑧', '⑨', '⑩'];
+  dates.forEach(d => {
+    const row = findRow_(sh, d); if (!row) return;
+    const r = sh.getRange(row, 1, 1, SHEETS.FlightOrders.length).getValues()[0];
+    const meta = metaFromRow_(r);
+    if (meta.status !== STATUS.RELEASED) return;
+    rev = Math.max(rev, meta.revision);
+    const o = unpack_(r[12]) || {};
+    const ms = o.noMission ? [] : (o.missions || []);
+    const lines = ['📅 ' + thShort_(d) + ' — ' + (ms.length ? ms.length + ' ภารกิจ' : 'ไม่มีภารกิจ') + (meta.revision > 1 ? ' (ฉบับแก้ไข Rev.' + meta.revision + ')' : '')];
+    ms.forEach((m, i) => {
+      const t = m.times || {};
+      lines.push('');
+      lines.push((NUM[i] || '(' + (i + 1) + ')') + ' ' + (m.aircraftLabel || 'ภารกิจที่ ' + (i + 1)) + (m.acRole === 'primary' ? ' · บ.จริง' : m.acRole === 'spare' ? ' · บ.สำรอง' : '') + (m.type && m.type !== 'ภารกิจ' ? ' · ' + m.type : ''));
+      if (m.title) lines.push('ภารกิจ: ' + m.title);
+      if (m.route) lines.push('เส้นทาง: ' + m.route);
+      const tm = [['Brief', t.brief], [t.towMode === 'taxi' ? 'TAXI' : 'ลาก', t.tow], [/^\s*วิ่งขึ้น/.test(t.takeoff || '') ? '' : 'วิ่งขึ้น', t.takeoff]]
+        .filter(x => x[1]).map(x => (x[0] ? x[0] + ' ' : '') + x[1]);
+      if (tm.length) lines.push('เวลา: ' + tm.join(' · '));
+      const crew = (m.crew || []).map(c => (c.role ? c.role + ' ' : '') + c.name);
+      if (crew.length) lines.push('นักบิน: ' + crew.join(', '));
+      lines.push('การแต่งกาย: ' + (m.dress || 'ไม่ได้ระบุ'));
+    });
+    const sb = o.standby || {};
+    const st = Object.keys(STBY_TYPES).filter(k => sb[k] && sb[k].on).map(k => STBY_TYPES[k].label + ': ' + ((sb[k].pilots || []).filter(p => p.name).map(p => p.name).join(', ') || '—'));
+    if (st.length) { lines.push(''); st.forEach(x => lines.push(x)); }
+    blocks.push(lines.join('\n'));
+  });
+  return chunkText_('✈️ ใบจัดบิน release แล้ว' + (rev > 1 ? ' (มีการแก้ไข)' : '') + '\n' + rangeTh_(dates), blocks, tail);
+}
+
 function lineSettingsPublic_() {
   const c = lineCfg_();
-  return { lineConfigured: !!c.token, lineBasicId: c.basicId, appUrl: c.appUrl, lineBotOk: !!c.botId };
+  return { lineConfigured: !!c.token, lineBasicId: c.basicId, appUrl: c.appUrl, lineBotOk: !!c.botId, lineGroupId: c.groupId };
 }
 /** บันทึก token: ตรวจกับ LINE แล้วดึง bot userId + LINE ID (@xxx) มาเก็บ */
 function saveLineSettings_(st) {
@@ -1510,6 +1571,11 @@ function saveLineSettings_(st) {
     const u = String(st.appUrl).trim();
     if (u && !/^https:\/\//.test(u)) throw err_('BAD_REQUEST', 'ลิงก์แอปต้องขึ้นต้นด้วย https://');
     if (u) p.setProperty(LINE.APPURL_PROP, u); else p.deleteProperty(LINE.APPURL_PROP);
+  }
+  if (st.lineGroupId != null) {
+    const g = String(st.lineGroupId).trim();
+    if (g && !/^C[0-9a-f]{32}$/.test(g)) throw err_('BAD_REQUEST', 'Group ID ต้องขึ้นต้นด้วย C ตามด้วยตัวอักษร 32 ตัว (เช่น C1234…)');
+    if (g) p.setProperty(LINE.GROUP_PROP, g); else p.deleteProperty(LINE.GROUP_PROP);
   }
   if (st.lineToken === '-') {                       // ยกเลิกการเชื่อม LINE
     [LINE.TOKEN_PROP, LINE.BOT_PROP, LINE.BASIC_PROP].forEach(k => p.deleteProperty(k));
@@ -1525,6 +1591,16 @@ function saveLineSettings_(st) {
     p.setProperty(LINE.BOT_PROP, info.userId || '');
     p.setProperty(LINE.BASIC_PROP, info.basicId || '');
   }
+}
+
+/** admin: ส่งข้อความทดสอบเข้ากลุ่ม LINE */
+function lineTestGroup_(user) {
+  require_(user, 'settings');
+  const gid = lineCfg_().groupId;
+  if (!gid) throw err_('BAD_REQUEST', 'ยังไม่ได้ใส่ Group ID');
+  const res = linePush_(gid, '🔔 ทดสอบการแจ้งเตือนเข้ากลุ่มจากระบบใบจัดบิน ฝูงบิน 602\nเมื่อใบจัดบิน release ระบบจะส่งสรุปเข้ากลุ่มนี้');
+  if (!res.ok) throw err_('LINE', 'ส่งไม่สำเร็จ: HTTP ' + res.code + ' ' + res.body.slice(0, 200) + ' (ตรวจว่าเชิญ LINE OA เข้ากลุ่มแล้ว)');
+  return { sent: true };
 }
 
 /** admin: ส่งข้อความทดสอบหาตัวเอง */
