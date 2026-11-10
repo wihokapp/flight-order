@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  const APP_VERSION = '1.8.3';   // ให้ตรงกับ VERSION ใน sw.js
+  const APP_VERSION = '1.9.1';   // ให้ตรงกับ VERSION ใน sw.js
 
   // ───────────────────────── Constants ─────────────────────────
   const ROLE_LABEL = { admin: 'ผู้ดูแลระบบ', scheduler: 'ผู้จัดบิน', commander: 'ผู้บังคับบัญชา', documents: 'ผู้ดูแลเอกสาร', viewer: 'ผู้ชม' };
@@ -660,6 +660,7 @@
       const s = statusOf(d), hn = holidayName(d.date);
       return `<button class="day-tab ${d.date === S.date ? 'on' : ''}" role="tab" aria-selected="${d.date === S.date}" data-act="day-tab" data-d="${d.date}">
         <b>${esc(dayShort(d.date))}</b><span class="hn">${esc(hn || 'วันทำการ')}</span>
+        ${d.order ? `<span class="tab-count">${d.order.noMission ? 'ไม่มีภารกิจ' : d.order.missions.length + ' ภารกิจ'}</span>` : ''}
         <span class="chip ${s}">${esc(STATUS_LABEL[s])}</span><span class="dd" ${d.dirty ? '' : 'hidden'}><span class="dirty-dot"></span>แก้ไข</span></button>`;
     }).join('')}</div>` : '';
 
@@ -888,7 +889,7 @@
         ${acSummaryHtml(acList)}
       </section>
       <section class="card">
-        <div class="card-head"><h2>รายละเอียดภารกิจ</h2><span class="spacer"></span><span class="chip">${o.missions.length} ภารกิจ</span></div>
+        <div class="card-head"><h2>รายละเอียดภารกิจ</h2><span class="spacer"></span><span class="mcount">${o.noMission ? 'ไม่มีภารกิจ' : o.missions.length + ' ภารกิจ'}</span></div>
         <label class="no-mission"><input type="checkbox" data-act-change="no-mission" ${o.noMission ? 'checked' : ''}> ไม่มีภารกิจในวันนี้</label>
         ${o.noMission ? '' : missions}
         ${o.noMission ? '' : '<button class="btn add-mission" data-act="mission-add">＋ เพิ่มภารกิจ</button>'}
@@ -972,15 +973,23 @@
       const t = x.times;
       const times = [['Brief', t.brief], [t.towMode === 'taxi' ? 'TAXI' : 'ลาก', t.tow], [/^\s*วิ่งขึ้น/.test(t.takeoff) ? '' : 'วิ่งขึ้น', t.takeoff]]
         .filter(a => a[1]).map(a => (a[0] ? esc(a[0]) + ' ' : '') + '<b>' + esc(a[1]) + '</b>').join(' &nbsp;·&nbsp; ');
-      const park = [['ขาไป', x.parking.out], ['ขากลับ', x.parking.ret]].filter(a => a[1]).map(a => esc(a[0]) + ': ' + esc(a[1])).join(' &nbsp;·&nbsp; ');
       const pair = x.pairLabel || x.pairTail || '—';
-      const role = x.acRole === 'primary' ? '<b>บ.จริง</b> — บ.สำรอง: ' + esc(pair) : x.acRole === 'spare' ? '<b>บ.สำรอง</b> ของ บ.จริง: ' + esc(pair) : '';
-      return `<div class="d-mission"><div class="d-mhead">ภารกิจที่ ${i + 1}${x.aircraftLabel ? ' | ' + esc(x.aircraftLabel) : ''}${x.acRole ? ' · ' + (x.acRole === 'primary' ? 'บ.จริง' : 'บ.สำรอง') : ''}</div>
-        <table><tbody>
-        ${row('ประเภท', esc(x.type))}${row('บ.จริง / บ.สำรอง', role)}${row('ภารกิจ', x.title, true)}${row('Callsign', esc(x.callsign))}${row('เส้นทางบิน', esc(x.route))}
-        ${row('เชื้อเพลิง', x.fuel !== '' ? esc(fmtFuel(x.fuel)) + ' TONS' : '')}${row('เวลา', times)}${row('ผู้โดยสาร', esc(x.pax))}
-        ${row('ผอ.เดินทาง', vip(x.director))}${row('ผู้บังคับ บ.', vip(x.acCommander))}${x.hospitality && x.hospitality.on ? row('จัดรับรอง', x.hospitality.detail || 'มี', true) : ''}${row('จุดจอด', park)}
-        ${row('นักบิน', crew ? `<div class="d-crew">${crew}</div>` : '')}${row('POC', esc(x.poc))}${row('การแต่งกาย', esc(x.dress))}${row('หมายเหตุ', x.notes, true)}
+      const cell = (l, v, raw) => (v == null || v === '' ? null : { l, v: raw ? '<span class="pre">' + esc(v) + '</span>' : v });
+      const full = c => (c ? `<tr><td class="l">${esc(c.l)}</td><td colspan="3">${c.v}</td></tr>` : '');
+      const two = (p, q) => (p && q ? `<tr><td class="l">${esc(p.l)}</td><td>${p.v}</td><td class="l">${esc(q.l)}</td><td>${q.v}</td></tr>` : full(p || q));
+      const roleHead = x.acRole === 'primary' ? ' · บ.จริง' + (x.pairLabel || x.pairTail ? ' (บ.สำรอง: ' + esc(pair) + ')' : '')
+        : x.acRole === 'spare' ? ' · บ.สำรอง' + (x.pairLabel || x.pairTail ? ' (ของ บ.จริง: ' + esc(pair) + ')' : '') : '';
+      return `<div class="d-mission"><div class="d-mhead">ภารกิจที่ ${i + 1}${x.aircraftLabel ? ' | ' + esc(x.aircraftLabel) : ''}${roleHead}</div>
+        <table><colgroup><col style="width:13%"><col style="width:37%"><col style="width:13%"><col style="width:37%"></colgroup><tbody>
+        ${two(cell('ประเภท', esc(x.type)), cell('Callsign', esc(x.callsign)))}
+        ${full(cell('ภารกิจ', x.title, true))}
+        ${two(cell('เส้นทางบิน', esc(x.route)), cell('ผู้โดยสาร', esc(x.pax)))}
+        ${two(cell('เวลา', times), cell('เชื้อเพลิง', x.fuel !== '' ? esc(fmtFuel(x.fuel)) + ' TONS' : ''))}
+        ${two(cell('จุดจอดขาไป', esc(x.parking.out)), cell('จุดจอดขากลับ', esc(x.parking.ret)))}
+        ${two(cell('ผอ.เดินทาง', vip(x.director)), cell('ผู้บังคับ บ.', vip(x.acCommander)))}
+        ${two(x.hospitality && x.hospitality.on ? cell('จัดรับรอง', x.hospitality.detail || 'มี', true) : null, cell('หมายเหตุ', x.notes, true))}
+        ${full(cell('นักบิน', crew ? `<div class="d-crew">${crew}</div>` : ''))}
+        ${two(cell('POC', esc(x.poc)), cell('การแต่งกาย', esc(x.dress)))}
         </tbody></table></div>`;
     }).join('');
     const apprStatus = { NEW: 'ยังไม่บันทึก', DRAFT: 'ร่าง — ยังไม่ส่งขออนุมัติ', PENDING: 'PENDING — รอพิจารณา', APPROVED: 'APPROVED — อนุมัติ', DENIED: 'DENIED — ไม่อนุมัติ', RELEASED: 'APPROVED — อนุมัติ / RELEASED' }[st];
@@ -1001,7 +1010,7 @@
       <table><thead><tr><th style="width:20%">เครื่อง / แบบ</th><th style="width:11%">สถานะ</th><th>ข้อขัดข้อง / รายละเอียด</th><th style="width:24%">Plan Check</th></tr></thead><tbody>
         ${ac.length ? ac.map(a => `<tr><td>${esc(a.tail)} / ${esc(a.type)}</td><td class="center ${esc(a.status)}"><b>${esc(a.status)}</b></td><td>${esc(a.detail)}</td><td>${esc(a.planCheck)}</td></tr>`).join('') : '<tr><td colspan="4" class="center">—</td></tr>'}
       </tbody></table>
-      <div class="d-sec">รายละเอียดภารกิจ${o.noMission ? '' : ' — ' + o.missions.length + ' ภารกิจ'}</div>
+      <div class="d-sec d-sec-big">รายละเอียดภารกิจ${o.noMission ? ' — ไม่มีภารกิจ' : ' — <span>' + o.missions.length + ' ภารกิจ</span>'}</div>
       ${missions}
       ${o.remarks ? `<div class="d-sec">หมายเหตุ</div><table><tbody><tr><td class="pre">${esc(o.remarks)}</td></tr></tbody></table>` : ''}
       <div class="d-approval"><div class="d-sec">การพิจารณาใบจัดบิน</div>
@@ -1645,11 +1654,15 @@
         <form id="lnForm" class="grid">
           <label class="field"><span>Channel access token (long-lived) จาก LINE Developers → Messaging API</span>
             <input name="lineToken" type="password" autocomplete="off" placeholder="${st.lineConfigured ? 'ตั้งค่าแล้ว — เว้นว่างถ้าไม่เปลี่ยน' : 'วาง token ที่นี่'}"></label>
+          <label class="field"><span>LINE Group ID — ส่งสรุปใบจัดบินเข้ากลุ่มเมื่อ release (เว้นว่าง = ไม่ส่งเข้ากลุ่ม)</span>
+            <input name="lineGroupId" value="${esc(st.lineGroupId || '')}" placeholder="C1234567890abcdef…" autocomplete="off" spellcheck="false"></label>
           <label class="field"><span>ลิงก์แอป (ใส่ในข้อความแจ้งเตือน)</span><input name="appUrl" value="${esc(st.appUrl || (location.origin + location.pathname))}" placeholder="https://<user>.github.io/<repo>/"></label>
           <div class="small muted">Webhook URL ที่ต้องใส่ใน LINE Developers (เปิด Use webhook):<br><code class="sel">${esc((window.APP_CONFIG && window.APP_CONFIG.API_URL) || '(โหมดทดลอง)')}</code><br>
-            แจ้งเตือน: release → นักบินในใบ · ส่งขออนุมัติ → ผู้บังคับบัญชา · อนุมัติ/ไม่อนุมัติ → ผู้ที่ส่งขออนุมัติ</div>
+            แจ้งเตือน: release → นักบินในใบ + สรุปเข้ากลุ่ม · ส่งขออนุมัติ → ผู้บังคับบัญชา · อนุมัติ/ไม่อนุมัติ → ผู้ที่ส่งขออนุมัติ<br>
+            กลุ่ม: เปิด "Allow bot to join group chats" ใน LINE Developers แล้วเชิญ OA เข้ากลุ่ม — OA จะตอบ Group ID ของกลุ่มให้</div>
           <div class="form-error" id="lnErr"></div>
           <div class="row"><button class="btn primary" type="submit">บันทึกและตรวจ token</button>
+            ${st.lineConfigured && st.lineGroupId ? '<button class="btn ghost" type="button" id="lnTestGroup">ส่งข้อความทดสอบเข้ากลุ่ม</button>' : ''}
             ${st.lineConfigured ? '<button class="btn ghost" type="button" id="lnTest">ส่งข้อความทดสอบหาตัวเอง</button><button class="btn danger-ghost" type="button" id="lnOff">ยกเลิกการเชื่อม LINE</button>' : ''}</div>
         </form></section>
       <section class="card" id="holCard"></section>`;
@@ -1658,10 +1671,11 @@
       e.preventDefault();
       const fd = new FormData(e.target);
       try {
-        const r = await api('saveSettings', { settings: { lineToken: String(fd.get('lineToken') || '').trim(), appUrl: String(fd.get('appUrl') || '').trim() } }, { silent: true });
+        const r = await api('saveSettings', { settings: { lineToken: String(fd.get('lineToken') || '').trim(), appUrl: String(fd.get('appUrl') || '').trim(), lineGroupId: String(fd.get('lineGroupId') || '').trim() } }, { silent: true });
         S.settings.lineConfigured = !!(r.lineConfigured && r.lineBasicId); toast('บันทึกแล้ว' + (r.lineBasicId ? ' — LINE OA ' + r.lineBasicId : '')); renderShell(); S.tab = 'settings'; renderView();
       } catch (e2) { $('#lnErr').textContent = e2.message; }
     };
+    if ($('#lnTestGroup')) $('#lnTestGroup').onclick = async () => { try { await api('lineTestGroup', {}, { silent: true }); toast('ส่งข้อความทดสอบเข้ากลุ่มแล้ว'); } catch (e2) { $('#lnErr').textContent = e2.message; } };
     if ($('#lnTest')) $('#lnTest').onclick = async () => { try { await api('lineTest', {}, { silent: true }); toast('ส่งข้อความทดสอบแล้ว'); } catch (e2) { $('#lnErr').textContent = e2.message; } };
     if ($('#lnOff')) $('#lnOff').onclick = async () => {
       if (!(await confirmBox('ยกเลิกการเชื่อม LINE', 'ลบ token และหยุดส่งแจ้งเตือนทาง LINE ทั้งหมด? (รายชื่อที่ลงทะเบียนไว้ยังอยู่)', 'ยกเลิกการเชื่อม', 'bad'))) return;
