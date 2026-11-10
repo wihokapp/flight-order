@@ -294,9 +294,18 @@ code.sel { user-select: all; word-break: break-all; background: var(--blue-2); p
 .doc td.l { background: var(--blue); font-weight: 700; width: 20%; }
 .doc .d-mission { margin-top: 6px; border: 1px solid var(--navy); break-inside: avoid; page-break-inside: avoid; }
 .doc .d-mhead { background: var(--navy); color: #fff; font-weight: 700; text-align: center; font-size: 9.5pt; padding: 2px; }
-.doc .d-mission table td { border-left: 0; border-right: 0; }
-.doc .d-mission table td.l { border-right: 1px solid var(--line-strong); }
-.doc .d-crew { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; }
+.doc .d-crew { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 8px; }
+.doc .d-mission td.l { width: auto; }
+.doc .d-mission th, .doc .d-mission td { padding: 1px 4px; line-height: 1.3; }
+.doc .d-mission .d-mhead { padding: 1px 6px; }
+.doc .d-mission + .d-mission { margin-top: 5px; }
+.doc .d-mission table td { border-left: 1px solid var(--line-strong); }
+.doc .d-mission table tr td:first-child { border-left: 0; }
+.doc .d-mission table tr td:last-child { border-right: 0; }
+.doc .d-sec-big { font-size: 11pt; padding: 3px; }
+.doc .d-sec-big span { background: #fff; color: var(--navy); border-radius: 3px; padding: 0 8px; margin-left: 4px; font-size: 12pt; }
+.mcount { font-size: 18px; font-weight: 800; color: #fff; background: var(--navy); border-radius: 999px; padding: 3px 14px; }
+.day-tab .tab-count { font-size: 12px; font-weight: 800; color: var(--navy); }
 .doc .d-crew div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .doc .d-crew .g { grid-column: 1 / -1; font-weight: 700; color: var(--navy-ink); margin-top: 1px; }
 .doc .d-crew .g:first-child { margin-top: 0; }
