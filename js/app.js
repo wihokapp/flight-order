@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  const APP_VERSION = '1.9.3';   // ให้ตรงกับ VERSION ใน sw.js
+  const APP_VERSION = '1.9.4';   // ให้ตรงกับ VERSION ใน sw.js
 
   // ───────────────────────── Constants ─────────────────────────
   const ROLE_LABEL = { admin: 'ผู้ดูแลระบบ', scheduler: 'ผู้จัดบิน', commander: 'ผู้บังคับบัญชา', documents: 'ผู้ดูแลเอกสาร', viewer: 'ผู้ชม' };
@@ -720,8 +720,9 @@
         ${banners}
         ${dayActs.length ? `<div class="actions">${dayActs.join('')}</div>` : ''}
       </section>
-      ${editable() ? editorHtml() : (S.order && !m.hidden ? `<section class="card"><div class="doc-wrap">${docHtml(activeDay())}</div></section>` : '')}
+      ${editable() ? editorHtml() : (S.order && !m.hidden ? a4ViewerHtml(docHtml(activeDay())) : '')}
       ${m.exists && m.log && m.log.length && S.user.role !== 'viewer' ? logHtml(m.log) : ''}`;
+    mountA4(v);
     $('#rFrom').onchange = e => { const f = e.target.value; if (!f) return; let t = $('#rTo').value; if (!t || t < f) t = f; loadRange(f, t, f).catch(() => {}); };
     $('#rTo').onchange = e => { const t = e.target.value; if (!t) return; let f = $('#rFrom').value; if (!f || f > t) f = t; loadRange(f, t).catch(() => {}); };
   }
@@ -1027,6 +1028,78 @@
       <div class="d-foot"><span>พิมพ์โดย ${esc(S.user.displayName)} · ${esc(thaiTs(ymd(new Date()) + ' ' + new Date().toTimeString().slice(0, 5)))}</span><span>${m.exists ? 'Rev.' + esc(m.revision) + ' · v' + esc(m.version) : 'ยังไม่บันทึก'}${day.dirty ? ' · มีการแก้ไขที่ยังไม่บันทึก' : ''}</span></div>
     </div>`;
   }
+  // ───────── หน้า A4 จำลอง (สำหรับดูอย่างเดียว) — ตัดหน้าเหมือนตอนพิมพ์ แล้วย่อให้พอดีจอ ─────────
+  const MM = 96 / 25.4, A4 = { w: 210 * MM, contentH: 277 * MM };   // ตรงกับ @page margin 9mm 8mm 11mm
+  let a4Zoom = 1;
+  function a4ViewerHtml(html) {
+    return `<section class="card a4v">
+      <div class="a4v-bar"><span class="small muted" id="a4Info">กำลังจัดหน้า…</span><span class="grow"></span>
+        <button class="btn sm ghost icon" data-a4="out" aria-label="ย่อ">－</button>
+        <button class="btn sm ghost" data-a4="fit">พอดีจอ</button>
+        <button class="btn sm ghost icon" data-a4="in" aria-label="ขยาย">＋</button>
+        <button class="btn sm" data-act="print-day">🖨️ PDF / พิมพ์</button></div>
+      <div class="a4v-stage"><div class="a4v-sizer"><div class="a4v-pages"></div></div></div>
+      <div class="a4v-src" aria-hidden="true">${html}</div></section>`;
+  }
+  function paginateA4(src) {
+    const doc = src.querySelector('.doc'); if (!doc) return [];
+    doc.classList.add('a4-doc');
+    const top0 = doc.getBoundingClientRect().top, kids = Array.from(doc.children);
+    const pages = []; let cur = [], start = null;
+    kids.forEach(el => {
+      const r = el.getBoundingClientRect(), mt = parseFloat(getComputedStyle(el).marginTop) || 0;
+      const t = r.top - top0, b = r.bottom - top0;
+      if (start === null) start = t;
+      if (cur.length && b - start > A4.contentH) {
+        const carry = [];
+        if (el.classList.contains('d-foot') && cur.length > 1) carry.unshift(cur.pop());                        // ท้ายใบไม่อยู่หน้าเดียวโดด ๆ
+        while (cur.length > 1 && cur[cur.length - 1].classList.contains('d-sec')) carry.unshift(cur.pop());   // หัวข้อไม่ค้างท้ายหน้า
+        pages.push(cur); cur = carry;
+        start = (carry.length ? carry[0].getBoundingClientRect().top - top0 : t);
+      }
+      if (!cur.length && mt) start = t;   // ต้นหน้าไม่นับ margin
+      cur.push(el);
+    });
+    if (cur.length) pages.push(cur);
+    return pages;
+  }
+  function mountA4(root) {
+    const box = root.querySelector('.a4v'); if (!box) return;
+    const src = box.querySelector('.a4v-src'), wrap = box.querySelector('.a4v-pages');
+    const build = () => {
+      if (!box.isConnected) return;
+      const groups = paginateA4(src), n = groups.length;
+      wrap.innerHTML = '';
+      groups.forEach((els, i) => {
+        const pg = document.createElement('div'); pg.className = 'a4-page';
+        const d = document.createElement('div'); d.className = 'doc a4-doc';
+        els.forEach(el => d.appendChild(el.cloneNode(true)));
+        pg.appendChild(d);
+        const num = document.createElement('div'); num.className = 'a4-num'; num.textContent = 'หน้า ' + (i + 1) + ' / ' + n;
+        pg.appendChild(num); wrap.appendChild(pg);
+      });
+      src.innerHTML = '';
+      $('#a4Info').textContent = n + ' หน้า (A4)';
+      scaleA4();
+    };
+    (document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve()).then(build);
+    box.querySelectorAll('[data-a4]').forEach(btn => btn.onclick = () => {
+      const k = btn.dataset.a4;
+      a4Zoom = k === 'fit' ? 1 : Math.min(3, Math.max(0.5, a4Zoom * (k === 'in' ? 1.25 : 0.8)));
+      scaleA4();
+    });
+  }
+  function scaleA4() {
+    const stage = document.querySelector('.a4v-stage'), wrap = stage && stage.querySelector('.a4v-pages');
+    if (!wrap) return;
+    const fit = Math.min(1, (stage.clientWidth - 2) / A4.w), s = fit * a4Zoom;
+    const sizer = wrap.parentNode;
+    wrap.style.transform = 'scale(' + s + ')';
+    sizer.style.width = (A4.w * s) + 'px'; sizer.style.height = (wrap.offsetHeight * s) + 'px';
+    sizer.style.marginLeft = Math.max(0, (stage.clientWidth - A4.w * s) / 2) + 'px';
+  }
+  window.addEventListener('resize', () => scaleA4());
+
   function doPrint(days) {
     const root = $('#printRoot');
     root.innerHTML = days.map(docHtml).join('');
