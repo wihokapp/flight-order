@@ -314,6 +314,9 @@ code.sel { user-select: all; word-break: break-all; background: var(--blue-2); p
 .doc .d-foot { font-size: 7.5pt; color: #555; margin-top: 4px; display: flex; justify-content: space-between; }
 .doc .FMC { background: #d9ead3; } .doc .NMC, .doc .NMCM, .doc .NMCS, .doc .NMCB { background: #f4cccc; } .doc .PMC { background: #fff2cc; }
 .doc .center { text-align: center; }
+.doc td.appr.ok { background: #c8e6c9; color: #1b5e20; }
+.doc td.appr.bad { background: #f8c9c4; color: #b71c1c; }
+.doc td.appr.wait { background: #fff2b3; color: #7a5a00; }
 .doc .pre { white-space: pre-wrap; }
 #printRoot { display: none; }
 /* หน้า A4 จำลอง */
