@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  const APP_VERSION = '1.9.5';   // ให้ตรงกับ VERSION ใน sw.js
+  const APP_VERSION = '1.9.6';   // ให้ตรงกับ VERSION ใน sw.js
 
   // ───────────────────────── Constants ─────────────────────────
   const ROLE_LABEL = { admin: 'ผู้ดูแลระบบ', scheduler: 'ผู้จัดบิน', commander: 'ผู้บังคับบัญชา', documents: 'ผู้ดูแลเอกสาร', viewer: 'ผู้ชม' };
@@ -746,9 +746,9 @@
   }
   function multiField(key) {
     const [label, max] = DUTY_MULTI[key], list = S.order.duty[key];
-    const hint = key === 'schedulers' ? `<div class="small muted">เข้าเวรตามวันที่ของใบจัดบินนี้ (${esc(thaiDate(S.date))}) — ไม่ต้องใส่เบอร์</div>` : '';
+    const hint = key === 'schedulers' ? `<div class="small muted">เข้าเวรตามวันที่ของใบจัดบินนี้ (${esc(thaiDate(S.date))}) — เบอร์โทรดึงจากรายชื่ออัตโนมัติ</div>` : '';
     return `<div class="multi"><div class="multi-head"><b>${esc(label)}${key === 'schedulers' ? ' (' + esc(thaiMini(S.date)) + ')' : ''}</b> <span class="muted small">(สูงสุด ${max} คน)</span>${hint}</div>
-      ${list.map((p, i) => personField(`duty.${key}.${i}`, label + ' คนที่ ' + (i + 1), p, { rm: list.length > 1 ? [`duty.${key}`, i] : null })).join('')}
+      ${list.map((p, i) => personField(`duty.${key}.${i}`, label + ' คนที่ ' + (i + 1), p, { rm: list.length > 1 ? [`duty.${key}`, i] : null, phone: key === 'schedulers' || key === 'documents' })).join('')}
       ${list.length < max ? `<button class="btn sm ghost" data-act="person-add" data-list="duty.${key}" data-max="${max}">＋ เพิ่ม${esc(label)}</button>` : ''}</div>`;
   }
   function refuelOptions() {
@@ -808,6 +808,7 @@
             ${otherMissions.length ? `<span class="dup" title="ชื่อนี้อยู่ในภารกิจอื่นด้วย">ซ้ำ ภ.${otherMissions.join(',')}</span>` : ''}
             ${qual && qual.pass.length ? `<span class="q" title="คุณสมบัติบน ${esc(tk)}">${esc(qual.pass.join(' '))}</span>` : ''}
             ${j > 0 ? `<button class="btn sm ghost" data-act="crew-up" data-m="${i}" data-c="${j}" aria-label="เลื่อนขึ้น">↑</button>` : ''}</span>
+          <button class="btn sm ghost swap" data-act="crew-swap" data-m="${i}" data-c="${j}" aria-label="เปลี่ยนนักบินคนที่ ${j + 1}" title="เปลี่ยนนักบิน (คงหน้าที่ไว้)">⇄</button>
           <button class="rm" data-act="crew-rm" data-m="${i}" data-c="${j}" aria-label="ลบ ${esc(c.name)}">✕</button>
         </div>`;
       }).join('');
@@ -912,7 +913,8 @@
     const st = { q: '', inactive: false };
     const mission = opts.m != null ? S.order.missions[opts.m] : null;
     const tk = mission ? typeKey(mission.aircraftType) : (opts.tk || '');
-    const title = mission ? `เพิ่มนักบิน — ภารกิจที่ ${opts.m + 1}` : 'เลือกรายชื่อ';
+    const swap = mission && opts.swap != null ? mission.crew[opts.swap] : null;
+    const title = swap ? `เปลี่ยนนักบินคนที่ ${opts.swap + 1}${swap.role ? ' (' + swap.role + ')' : ''} — ภารกิจที่ ${opts.m + 1}` : mission ? `เพิ่มนักบิน — ภารกิจที่ ${opts.m + 1}` : 'เลือกรายชื่อ';
     const body = `
       <input class="input" id="pkQ" placeholder="ค้นหา ยศ ชื่อ นามสกุล หรือรหัส" autocomplete="off" autofocus>
       <div class="picker-filters">
@@ -922,7 +924,7 @@
       ${!S.crew.configured && !(S.crew.people || []).length ? '<div class="banner warn">ยังไม่ได้เชื่อม Google Sheets รายชื่อนักบิน (ผู้ดูแลระบบตั้งค่าได้ที่แท็บ "ตั้งค่า")</div>' : ''}`;
     modal({
       title, body,
-      foot: [{ label: mission ? 'เสร็จ' : 'ปิด', cls: 'primary', value: null }],
+      foot: [{ label: mission && !swap ? 'เสร็จ' : 'ปิด', cls: 'primary', value: null }],
       onOpen: (bg, close) => {
         const list = $('#pkList', bg);
         const draw = () => {
@@ -945,14 +947,21 @@
         $('#pkI', bg).onchange = e => { st.inactive = e.target.checked; draw(); };
         const choose = el => {
           const p = S.crewById[el.dataset.id]; if (!p) return;
-          if (mission) {
+          if (swap) {
+            const k = mission.crew.findIndex(c => c.id === p.id);
+            if (k >= 0 && k !== opts.swap) { toast(p.short + ' อยู่ในภารกิจนี้แล้ว (คนที่ ' + (k + 1) + ')', 'bad'); return; }
+            Object.assign(swap, { id: p.id, name: p.short, dept: p.deptCode || 'OPS' });   // คงหน้าที่ (role) ไว้
+            markDirty(); close(null);
+          } else if (mission) {
             const k = mission.crew.findIndex(c => c.id === p.id);
             if (k >= 0) mission.crew.splice(k, 1);
             else mission.crew.push({ id: p.id, name: p.short, dept: p.deptCode || 'OPS', role: '' });
             markDirty(); draw();
           } else {
             const t = getPath(S.order, opts.path);
-            t.id = p.id; t.name = p.short; markDirty(); close(null);
+            t.id = p.id; t.name = p.short;
+            if ('phone' in t && p.phone) t.phone = p.phone;
+            markDirty(); close(null);
           }
         };
         list.onclick = e => { const el = e.target.closest('.pick'); if (el) choose(el); };
@@ -969,6 +978,7 @@
     const d = o.duty;
     const nm = p => (p && p.name ? esc(p.name) : '—');
     const names = arr => (arr || []).filter(p => p.name).map(p => esc(p.name)).join(', ') || '—';
+    const namesTel = arr => (arr || []).filter(p => p.name).map(p => esc(p.name) + (p.phone ? ' <span class="tel">โทร. ' + esc(p.phone) + '</span>' : '')).join('<br>') || '—';
     const ri = Number(d.refuelIdx);
     const refuel = ri >= 0 && d.documents[ri] && d.documents[ri].name ? esc(d.documents[ri].name) : '—';
     const stamp = st === 'RELEASED' ? 'RELEASED · Rev.' + m.revision : st === 'APPROVED' ? 'อนุมัติแล้ว · ยังไม่ release' : st === 'DENIED' ? 'ไม่อนุมัติ' : st === 'PENDING' ? 'ขออนุมัติ · รอพิจารณา' : 'ร่าง · ยังไม่ขออนุมัติ';
@@ -1008,8 +1018,8 @@
       <table><tbody>
         <tr><td class="l">น.จัดบิน (${esc(thaiMini(prepDate(o, m)))})</td><td colspan="3">${nm(d.contact)}${d.contact.phone ? ' | โทร. ' + esc(d.contact.phone) : ''}</td></tr>
         <tr><td class="l">น.เวรกองบิน 6</td><td>${nm(d.wingDuty)}</td><td class="l">ผช.น.เวร กองบิน 6</td><td>${nm(d.wingDutyAsst)}</td></tr>
-        <tr><td class="l">น.เวร Controller</td><td>${nm(d.controller)}</td><td class="l">น.จัดบินประจำวัน (${esc(thaiMini(day.date))})</td><td>${names(d.schedulers)}</td></tr>
-        <tr><td class="l">น.เอกสาร</td><td>${names(d.documents)}</td><td class="l">น.ควบคุมการถ่าย ชพ.</td><td>${refuel}</td></tr>
+        <tr><td class="l">น.เวร Controller</td><td>${nm(d.controller)}</td><td class="l">น.จัดบินประจำวัน (${esc(thaiMini(day.date))})</td><td>${namesTel(d.schedulers)}</td></tr>
+        <tr><td class="l">น.เอกสาร</td><td>${namesTel(d.documents)}</td><td class="l">น.ควบคุมการถ่าย ชพ.</td><td>${refuel}</td></tr>
       </tbody></table>
       ${stbyOn.length ? `<div class="d-sec">นบ.STBY</div><table><tbody>${stbyOn.map(([k, label]) => `<tr><td class="l" style="width:30%">${esc(label)}</td>
         <td>${o.standby[k].pilots.filter(p => p.name).map((p, j) => (j + 1) + '. ' + esc(p.name)).join(' &nbsp;&nbsp; ') || '—'}</td></tr>`).join('')}</tbody></table>` : ''}
@@ -1329,6 +1339,7 @@
       }
       markDirty(); renderView();
     },
+    'crew-swap': el => openPicker({ m: +el.dataset.m, swap: +el.dataset.c }),
     'crew-rm': el => { S.order.missions[+el.dataset.m].crew.splice(+el.dataset.c, 1); markDirty(); renderView(); },
     'crew-up': el => { const c = S.order.missions[+el.dataset.m].crew, j = +el.dataset.c; [c[j - 1], c[j]] = [c[j], c[j - 1]]; markDirty(); renderView(); },
     'change-pw': () => { $('#menu').hidden = true; renderChangePassword(false); },
@@ -1534,6 +1545,7 @@
         <label class="field"><span>ยศ</span><input id="pf_rank" list="rankList" value="${esc(p.rank || '')}" placeholder="เช่น ร.อ." ${isNew ? 'autofocus' : ''}></label>
         <div class="grid g2"><label class="field"><span>ชื่อ</span><input id="pf_first" value="${esc(p.first || '')}"></label>
           <label class="field"><span>นามสกุล</span><input id="pf_last" value="${esc(p.last || '')}"></label></div>
+        <label class="field"><span>เบอร์โทร (คอลัมน์ F แท็บ Crew)</span><input id="pf_phone" value="${esc(p.phone || '')}" inputmode="tel" placeholder="08x-xxx-xxxx"></label>
         <div class="small">ชื่อที่จะแสดงในใบจัดบิน: <b id="pf_prev">${esc(p.short || '—')}</b></div>
         <div class="form-error" id="pf_err"></div></div>`,
       foot: [{ label: 'ยกเลิก', cls: 'ghost', value: null }, { label: isNew ? 'เพิ่มนักบิน' : 'บันทึก', cls: 'primary',
@@ -1542,7 +1554,7 @@
           if (miss.length) $('#pf_err', bg).textContent = 'กรุณากรอก ' + miss.join(', ');
           return !miss.length;
         },
-        value: bg => ({ id: p.id || '', rank: $('#pf_rank', bg).value.trim(), first: $('#pf_first', bg).value.trim(), last: $('#pf_last', bg).value.trim() }) }],
+        value: bg => ({ id: p.id || '', rank: $('#pf_rank', bg).value.trim(), first: $('#pf_first', bg).value.trim(), last: $('#pf_last', bg).value.trim(), phone: $('#pf_phone', bg).value.trim() }) }],
       onOpen: bg => {
         const upd = () => { $('#pf_prev', bg).textContent = shortName($('#pf_rank', bg).value.trim(), $('#pf_first', bg).value.trim().replace(/\s+/g, ''), $('#pf_last', bg).value.trim()) || '—'; };
         ['pf_rank', 'pf_first', 'pf_last'].forEach(id => $('#' + id, bg).addEventListener('input', upd));
@@ -1823,7 +1835,20 @@
     if (t.dataset.bind && S.order && !t.closest('.modal-bg')) {
       setPath(S.order, t.dataset.bind, t.value);
       const m = t.dataset.bind.match(/^(.+)\.name$/);
-      if (m) { const parent = getPath(S.order, m[1]); if (parent && 'id' in parent) parent.id = ''; }
+      if (m) {
+        const parent = getPath(S.order, m[1]);
+        if (parent && 'id' in parent) {
+          parent.id = '';
+          const hit = /^duty\./.test(m[1]) && (S.crew.people || []).find(p => p.short === t.value.trim());
+          if (hit) {
+            parent.id = hit.id;
+            if ('phone' in parent && hit.phone && !String(parent.phone || '').trim()) {
+              parent.phone = hit.phone;
+              const ph = document.querySelector(`[data-bind="${m[1]}.phone"]`); if (ph) ph.value = hit.phone;
+            }
+          }
+        }
+      }
       if (t.dataset.bind === 'duty.preparedDate' && $('#prepLbl') && isKey(t.value)) $('#prepLbl').textContent = thaiMini(t.value);
       if (t.dataset.bind === 'duty.contact.phone' && S.user) { try { localStorage.setItem('fo602_phone_' + S.user.username, t.value); } catch (e2) { /* ignore */ } }
       if (/\.(director|acCommander)\.(name|position|phone)$/.test(t.dataset.bind)) t.closest('.field').classList.toggle('missing', !t.value.trim());   // พิมพ์ชื่อเอง → ไม่ผูกกับรหัสในฐานข้อมูล
