@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  const APP_VERSION = '1.9.4';   // ให้ตรงกับ VERSION ใน sw.js
+  const APP_VERSION = '1.9.5';   // ให้ตรงกับ VERSION ใน sw.js
 
   // ───────────────────────── Constants ─────────────────────────
   const ROLE_LABEL = { admin: 'ผู้ดูแลระบบ', scheduler: 'ผู้จัดบิน', commander: 'ผู้บังคับบัญชา', documents: 'ผู้ดูแลเอกสาร', viewer: 'ผู้ชม' };
@@ -1022,7 +1022,7 @@
       ${o.remarks ? `<div class="d-sec">หมายเหตุ</div><table><tbody><tr><td class="pre">${esc(o.remarks)}</td></tr></tbody></table>` : ''}
       <div class="d-approval"><div class="d-sec">การพิจารณาใบจัดบิน</div>
         <table><tbody>
-          <tr><td class="l">สถานะ</td><td><b>${esc(apprStatus)}</b></td><td class="l">ผู้พิจารณา</td><td>${esc(m.approvedBy || '')}</td></tr>
+          <tr><td class="l">สถานะ</td><td class="appr ${st === 'APPROVED' || st === 'RELEASED' ? 'ok' : st === 'DENIED' ? 'bad' : 'wait'}"><b>${esc(apprStatus)}</b></td><td class="l">ผู้พิจารณา</td><td>${esc(m.approvedBy || '')}</td></tr>
           <tr><td class="l">วันที่ / เวลา</td><td>${esc(thaiTs(m.approvedAt))}</td><td class="l">${st === 'DENIED' ? 'เหตุผล' : 'Release โดย'}</td><td>${st === 'DENIED' ? esc(m.denyReason) : esc(m.releasedBy ? m.releasedBy + ' · ' + thaiTs(m.releasedAt) : '')}</td></tr>
         </tbody></table></div>
       <div class="d-foot"><span>พิมพ์โดย ${esc(S.user.displayName)} · ${esc(thaiTs(ymd(new Date()) + ' ' + new Date().toTimeString().slice(0, 5)))}</span><span>${m.exists ? 'Rev.' + esc(m.revision) + ' · v' + esc(m.version) : 'ยังไม่บันทึก'}${day.dirty ? ' · มีการแก้ไขที่ยังไม่บันทึก' : ''}</span></div>
