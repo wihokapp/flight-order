@@ -306,7 +306,7 @@ code.sel { user-select: all; word-break: break-all; background: var(--blue-2); p
 .doc .d-sec-big span { background: #fff; color: var(--navy); border-radius: 3px; padding: 0 8px; margin-left: 4px; font-size: 12pt; }
 .mcount { font-size: 18px; font-weight: 800; color: #fff; background: var(--navy); border-radius: 999px; padding: 3px 14px; }
 .day-tab .tab-count { font-size: 12px; font-weight: 800; color: var(--navy); }
-.doc .d-crew div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.doc .d-crew div { overflow-wrap: anywhere; }
 .doc .d-crew .g { grid-column: 1 / -1; font-weight: 700; color: var(--navy-ink); margin-top: 1px; }
 .doc .d-crew .g:first-child { margin-top: 0; }
 .doc .d-none { text-align: center; padding: 14px; border: 1px solid var(--line-strong); margin-top: 6px; font-weight: 700; font-size: 11pt; }
@@ -316,6 +316,18 @@ code.sel { user-select: all; word-break: break-all; background: var(--blue-2); p
 .doc .center { text-align: center; }
 .doc .pre { white-space: pre-wrap; }
 #printRoot { display: none; }
+/* หน้า A4 จำลอง */
+.a4v { padding: 10px; }
+.a4v-bar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.a4v-stage { overflow-x: auto; background: #8a94a6; border-radius: 8px; padding: 0; min-height: 120px; }
+.a4v-sizer { overflow: hidden; }
+.a4v-pages { width: 210mm; transform-origin: top left; padding: 0; }
+.a4-page { width: 210mm; height: 297mm; background: #fff; padding: 9mm 8mm 11mm; position: relative; overflow: hidden; margin: 0 0 6mm; box-shadow: 0 2px 10px rgba(0,0,0,.25); }
+.a4-page:last-child { margin-bottom: 0; }
+.doc.a4-doc { width: 194mm; max-width: none; padding: 0; margin: 0; box-shadow: none; }
+.a4-num { position: absolute; right: 8mm; bottom: 4mm; font-size: 8pt; color: #555; }
+.a4v-src { position: absolute; left: -10000px; top: 0; width: 210mm; visibility: hidden; }
+.a4v-src .doc { width: 194mm; max-width: none; padding: 0; box-shadow: none; }
 .doc + .doc { margin-top: 14px; }
 
 /* ───────── Responsive ───────── */
@@ -359,5 +371,7 @@ code.sel { user-select: all; word-break: break-all; background: var(--blue-2); p
   #printRoot { display: block !important; }
   #printRoot .doc { width: 100%; max-width: none; box-shadow: none; padding: 0; margin: 0; }
   #printRoot .doc + .doc { break-before: page; page-break-before: always; }
+  #printRoot .doc .d-sec { break-after: avoid; page-break-after: avoid; }
+  #printRoot .doc .d-foot { break-before: avoid; page-break-before: avoid; }
   * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
 }
