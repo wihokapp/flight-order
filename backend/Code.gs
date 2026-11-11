@@ -350,10 +350,17 @@ function bootstrap_(user, req) {
 }
 
 // ───────────────────────── Crew: นักบินฝ่ายยุทธการ (Google Sheet ภายนอก) ─────────────────────────
+/** คอลัมน์เบอร์โทรในแท็บ Crew: หาจากหัวคอลัมน์ ถ้าไม่เจอใช้คอลัมน์ F (index 5) — คืน index เริ่ม 0 หรือ -1 */
+function crewPhoneCol_(head) {
+  const names = ['เบอร์โทร', 'เบอร์โทรศัพท์', 'เบอร์', 'โทร', 'โทร.', 'โทรศัพท์', 'Phone', 'Tel', 'Mobile'];
+  for (const n of names) { const i = head.indexOf(n); if (i >= 0) return i; }
+  return head.length > 5 ? 5 : -1;
+}
+
 function getCrew_(refresh) {
   const cache = CacheService.getScriptCache();
   if (!refresh) {
-    const hit = cache.get('crew_v1');
+    const hit = cache.get('crew_v2');
     if (hit) return JSON.parse(hit);
   }
   const props = PropertiesService.getScriptProperties();
@@ -372,6 +379,7 @@ function getCrew_(refresh) {
   const cCode = col(['DeptCode', 'รหัสฝ่าย']);
   const cRank = col(['ยศ']);
   const cName = col(['ชื่อ-สกุล', 'ชื่อ - สกุล', 'ชื่อสกุล']);
+  const cPhone = crewPhoneCol_(head);
   if (cId < 0 || cRank < 0 || cName < 0) throw err_('CREW', 'แท็บรายชื่อต้องมีคอลัมน์ ID, ยศ, ชื่อ-สกุล');
 
   // ข้อมูลเสริมของนักบิน (ถ้ามี): สถานะใช้งาน + สถานะพระราชพาหนะ + คุณสมบัติรายแบบ
@@ -424,13 +432,14 @@ function getCrew_(refresh) {
       dept: cDept >= 0 ? String(r[cDept]).trim() : '',
       deptCode: deptCode,
       short: shortName_(rank, first, last),
+      phone: cPhone >= 0 ? String(r[cPhone] || '').trim() : '',
       royal: x.royal || '',
       quals: x.quals || null,
       active: !x.inactive,
     });
   });
   const out = { people: people, configured: true, updatedAt: now_() };
-  try { cache.put('crew_v1', JSON.stringify(out), APP.CREW_CACHE_TTL); } catch (e) { /* ใหญ่เกิน cache ก็ไม่เป็นไร */ }
+  try { cache.put('crew_v2', JSON.stringify(out), APP.CREW_CACHE_TTL); } catch (e) { /* ใหญ่เกิน cache ก็ไม่เป็นไร */ }
   return out;
 }
 
@@ -456,9 +465,9 @@ function crewBook_() {
   const head = sh.getRange(1, 1, 1, sh.getLastColumn()).getDisplayValues()[0].map(h => String(h).trim());
   const col = names => { for (const n of names) { const i = head.indexOf(n); if (i >= 0) return i + 1; } return 0; };
   const c = { id: col(['ID', 'PilotID', 'PersonID', 'รหัส']), dept: col(['ฝ่าย']), code: col(['DeptCode', 'รหัสฝ่าย']),
-              rank: col(['ยศ']), name: col(['ชื่อ-สกุล', 'ชื่อ - สกุล', 'ชื่อสกุล']) };
+              rank: col(['ยศ']), name: col(['ชื่อ-สกุล', 'ชื่อ - สกุล', 'ชื่อสกุล']), phone: crewPhoneCol_(head) + 1 };
   if (!c.id || !c.rank || !c.name) throw err_('CREW', 'แท็บรายชื่อต้องมีคอลัมน์ ID, ยศ, ชื่อ-สกุล');
-  return { ss: ss, sh: sh, c: c, width: head.length };
+  return { ss: ss, sh: sh, c: c, width: Math.max(head.length, c.phone) };
 }
 
 function cleanPilotInput_(p) {
@@ -467,7 +476,8 @@ function cleanPilotInput_(p) {
   if (!rank) throw err_('BAD_REQUEST', 'กรุณาระบุยศ');
   if (!first) throw err_('BAD_REQUEST', 'กรุณาระบุชื่อ');
   if (!last) throw err_('BAD_REQUEST', 'กรุณาระบุนามสกุล');
-  return { rank: rank, first: first, last: last };
+  const phone = t(p.phone).slice(0, 40);
+  return { rank: rank, first: first, last: last, phone: phone, hasPhone: p.phone !== undefined };
 }
 
 function savePilot_(user, p) {
@@ -492,6 +502,7 @@ function savePilot_(user, p) {
       row[b.c.id - 1] = newId; row[b.c.rank - 1] = v.rank; row[b.c.name - 1] = full;
       if (b.c.dept) row[b.c.dept - 1] = 'ฝ่ายยุทธการ';
       if (b.c.code) row[b.c.code - 1] = code;
+      if (b.c.phone) row[b.c.phone - 1] = v.phone;
       const r = ids.indexOf('');
       const at = r >= 0 ? r + 2 : b.sh.getLastRow() + 1;      // ใช้แถวว่างที่มีอยู่ก่อน
       b.sh.getRange(at, 1, 1, b.width).setValues([row]);
@@ -506,6 +517,7 @@ function savePilot_(user, p) {
     }
     b.sh.getRange(at + 2, b.c.rank).setValue(v.rank);
     b.sh.getRange(at + 2, b.c.name).setValue(full);
+    if (b.c.phone && v.hasPhone) b.sh.getRange(at + 2, b.c.phone).setValue(v.phone);
     afterPilotChange_(user, 'updatePilot', id + ' → ' + v.rank + full);
     return { id: id, updated: true, crew: getCrew_(true) };
   });
@@ -541,7 +553,7 @@ function setPilotActive_(user, id, active) {
 }
 
 function afterPilotChange_(user, action, detail) {
-  CacheService.getScriptCache().remove('crew_v1');
+  CacheService.getScriptCache().remove('crew_v2');
   audit_(user.username, action, detail);
 }
 
@@ -936,6 +948,7 @@ function sanitizeOrder_(o, date) {
     schedulers: list(duty.schedulers || duty.scheduler, 2),       // น.จัดบิน สูงสุด 2 คน
     documents: list(duty.documents, 3),                         // น.เอกสาร สูงสุด 3 คน
     contact: person(duty.contact),
+    preparedDate: /^\d{4}-\d{2}-\d{2}$/.test(String(duty.preparedDate || '')) ? String(duty.preparedDate) : '',   // วันที่จัดทำใบ
   };
   // น.ควบคุมการถ่าย ชพ. = หนึ่งใน น.เอกสาร (บางวันไม่มี)
   let ri = Number(duty.refuelIdx);
@@ -1202,7 +1215,7 @@ function saveSettings_(user, st) {
     }
   }
   saveLineSettings_(st);
-  CacheService.getScriptCache().remove('crew_v1');
+  CacheService.getScriptCache().remove('crew_v2');
   audit_(user.username, 'saveSettings', '');
   const out = getSettings_(user);
   try { out.crewCount = getCrew_(true).people.length; } catch (e) { out.crewError = e.message; }
