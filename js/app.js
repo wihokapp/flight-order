@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  const APP_VERSION = '1.9.2';   // ให้ตรงกับ VERSION ใน sw.js
+  const APP_VERSION = '1.9.3';   // ให้ตรงกับ VERSION ใน sw.js
 
   // ───────────────────────── Constants ─────────────────────────
   const ROLE_LABEL = { admin: 'ผู้ดูแลระบบ', scheduler: 'ผู้จัดบิน', commander: 'ผู้บังคับบัญชา', documents: 'ผู้ดูแลเอกสาร', viewer: 'ผู้ชม' };
@@ -51,6 +51,11 @@
   function parseKey(k) { const [y, m, d] = k.split('-').map(Number); return new Date(y, m - 1, d); }
   function addDays(k, n) { const d = parseKey(k); d.setDate(d.getDate() + n); return ymd(d); }
   function thaiDate(k) { const d = parseKey(k); return 'วัน' + DAYS[d.getDay()] + 'ที่ ' + d.getDate() + ' ' + MONTHS[d.getMonth()] + ' ' + (d.getFullYear() + 543); }
+  /** '11 พ.ย.69' */
+  function thaiMini(k) { const d = parseKey(k); return d.getDate() + ' ' + MONTHS_S[d.getMonth()] + String(d.getFullYear() + 543).slice(2); }
+  const isKey = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ''));
+  /** วันที่จัดทำใบ: ที่กรอกไว้ → วันที่บันทึกล่าสุด → วันนี้ */
+  function prepDate(o, meta) { return isKey(o.duty.preparedDate) ? o.duty.preparedDate : (meta && isKey(String(meta.updatedAt || '').slice(0, 10)) ? String(meta.updatedAt).slice(0, 10) : todayKey()); }
   function thaiShort(k) { const d = parseKey(k); return d.getDate() + ' ' + MONTHS_S[d.getMonth()] + ' ' + String(d.getFullYear() + 543).slice(2); }
   function thaiTs(ts) {
     if (!ts) return '';
@@ -90,7 +95,7 @@
   }
   function blankOrder() {
     return { title: S.settings.unitTitle,
-      duty: { wingDuty: blankP(), wingDutyAsst: blankP(), controller: blankP(), schedulers: [blankP()], documents: [blankP()], refuelIdx: -1, contact: myContact() },
+      duty: { wingDuty: blankP(), wingDutyAsst: blankP(), controller: blankP(), schedulers: [blankP()], documents: [blankP()], refuelIdx: -1, contact: myContact(), preparedDate: todayKey() },
       standby: blankStandby(), noMission: false, missions: [blankMission()], remarks: '' };
   }
   /** แปลงข้อมูลเก่า/ใหม่ให้เป็นโครงสร้างปัจจุบันเสมอ */
@@ -100,7 +105,7 @@
     const lst = (v, max) => { const a = (Array.isArray(v) ? v : (v && (v.name || v.id) ? [v] : [])).slice(0, max).map(pp); return a.length ? a : [blankP()]; };
     const ri = Number(d.refuelIdx);
     const duty = { wingDuty: pp(d.wingDuty), wingDutyAsst: pp(d.wingDutyAsst), controller: pp(d.controller),
-      schedulers: lst(d.schedulers || d.scheduler, 2), documents: lst(d.documents, 3), refuelIdx: Number.isInteger(ri) ? ri : -1, contact: pp(d.contact) };
+      schedulers: lst(d.schedulers || d.scheduler, 2), documents: lst(d.documents, 3), refuelIdx: Number.isInteger(ri) ? ri : -1, contact: pp(d.contact), preparedDate: isKey(d.preparedDate) ? d.preparedDate : '' };
     const standby = blankStandby();
     Object.keys(standby).forEach(k => {
       const x = (o.standby || {})[k];
@@ -741,7 +746,7 @@
   function multiField(key) {
     const [label, max] = DUTY_MULTI[key], list = S.order.duty[key];
     const hint = key === 'schedulers' ? `<div class="small muted">เข้าเวรตามวันที่ของใบจัดบินนี้ (${esc(thaiDate(S.date))}) — ไม่ต้องใส่เบอร์</div>` : '';
-    return `<div class="multi"><div class="multi-head"><b>${esc(label)}</b> <span class="muted small">(สูงสุด ${max} คน)</span>${hint}</div>
+    return `<div class="multi"><div class="multi-head"><b>${esc(label)}${key === 'schedulers' ? ' (' + esc(thaiMini(S.date)) + ')' : ''}</b> <span class="muted small">(สูงสุด ${max} คน)</span>${hint}</div>
       ${list.map((p, i) => personField(`duty.${key}.${i}`, label + ' คนที่ ' + (i + 1), p, { rm: list.length > 1 ? [`duty.${key}`, i] : null })).join('')}
       ${list.length < max ? `<button class="btn sm ghost" data-act="person-add" data-list="duty.${key}" data-max="${max}">＋ เพิ่ม${esc(label)}</button>` : ''}</div>`;
   }
@@ -868,9 +873,10 @@
 
     return `
       <section class="card">
-        <div class="card-head"><h2>น.จัดบินผู้จัดทำใบ (ติดต่อ)</h2><span class="muted small">น.จัดบินที่เข้าเวรในวันที่จัดทำใบนี้ — ชื่อและเบอร์แสดงเป็นผู้ติดต่อในใบ</span></div>
-        <div class="grid g2">${personField('duty.contact', 'ชื่อผู้จัดทำ', o.duty.contact)}
-          <label class="field"><span>เบอร์ติดต่อ</span><input data-bind="duty.contact.phone" value="${esc(o.duty.contact.phone)}" inputmode="tel" placeholder="08x-xxx-xxxx"></label></div>
+        <div class="card-head"><h2>น.จัดบิน (<span id="prepLbl">${esc(thaiMini(prepDate(o, S.meta)))}</span>)</h2><span class="muted small">น.จัดบินที่เข้าเวรในวันที่จัดทำใบนี้ — ชื่อและเบอร์แสดงเป็นผู้ติดต่อในใบ</span></div>
+        <div class="grid g3">${personField('duty.contact', 'ชื่อ', o.duty.contact)}
+          <label class="field"><span>เบอร์ติดต่อ</span><input data-bind="duty.contact.phone" value="${esc(o.duty.contact.phone)}" inputmode="tel" placeholder="08x-xxx-xxxx"></label>
+          <label class="field"><span>วันที่จัดทำ</span><input type="date" data-bind="duty.preparedDate" value="${esc(prepDate(o, S.meta))}"></label></div>
       </section>
       <section class="card">
         <div class="card-head"><h2>ข้อมูลเวรและผู้รับผิดชอบ</h2></div>
@@ -999,9 +1005,9 @@
       <div class="d-date">${esc(thaiDate(day.date))}</div>
       <div class="d-sec">ข้อมูลเวรและผู้รับผิดชอบ</div>
       <table><tbody>
-        <tr><td class="l">น.จัดบินผู้จัดทำ (ติดต่อ)</td><td colspan="3">${nm(d.contact)}${d.contact.phone ? ' | โทร. ' + esc(d.contact.phone) : ''}</td></tr>
+        <tr><td class="l">น.จัดบิน (${esc(thaiMini(prepDate(o, m)))})</td><td colspan="3">${nm(d.contact)}${d.contact.phone ? ' | โทร. ' + esc(d.contact.phone) : ''}</td></tr>
         <tr><td class="l">น.เวรกองบิน 6</td><td>${nm(d.wingDuty)}</td><td class="l">ผช.น.เวร กองบิน 6</td><td>${nm(d.wingDutyAsst)}</td></tr>
-        <tr><td class="l">น.เวร Controller</td><td>${nm(d.controller)}</td><td class="l">น.จัดบินประจำวัน</td><td>${names(d.schedulers)}</td></tr>
+        <tr><td class="l">น.เวร Controller</td><td>${nm(d.controller)}</td><td class="l">น.จัดบินประจำวัน (${esc(thaiMini(day.date))})</td><td>${names(d.schedulers)}</td></tr>
         <tr><td class="l">น.เอกสาร</td><td>${names(d.documents)}</td><td class="l">น.ควบคุมการถ่าย ชพ.</td><td>${refuel}</td></tr>
       </tbody></table>
       ${stbyOn.length ? `<div class="d-sec">นบ.STBY</div><table><tbody>${stbyOn.map(([k, label]) => `<tr><td class="l" style="width:30%">${esc(label)}</td>
@@ -1078,7 +1084,7 @@
     days.forEach(d => {
       const o = d.order; if (!o) return;
       const w = [];
-      if (!o.duty.contact.name) w.push('ยังไม่มีชื่อ น.จัดบินผู้จัดทำ');
+      if (!o.duty.contact.name) w.push('ยังไม่มีชื่อ น.จัดบิน (วันที่จัดทำ)');
       if (!o.noMission) o.missions.forEach((m, i) => {
         const miss = [];
         if (!m.aircraftTail) miss.push('เครื่องบิน');
@@ -1157,7 +1163,7 @@
         foot: [{ label: 'ยกเลิก', cls: 'ghost', value: null }, { label: 'คัดลอก', cls: 'primary', value: bg => ({ duty: $('#cpDuty', bg).checked, stby: $('#cpStby', bg).checked, mis: $('#cpMis', bg).checked, rem: $('#cpRem', bg).checked }) }] });
       if (!pick) return;
       const c = clone(src);
-      if (pick.duty) S.order.duty = c.duty;
+      if (pick.duty) S.order.duty = Object.assign(c.duty, { preparedDate: S.order.duty.preparedDate });
       if (pick.stby) S.order.standby = c.standby;
       if (pick.mis) { S.order.noMission = c.noMission; S.order.missions = c.missions.map(m => Object.assign(m, { id: rid() })); if (!S.order.noMission && !S.order.missions.length) S.order.missions.push(blankMission()); }
       if (pick.rem) S.order.remarks = c.remarks;
@@ -1745,6 +1751,7 @@
       setPath(S.order, t.dataset.bind, t.value);
       const m = t.dataset.bind.match(/^(.+)\.name$/);
       if (m) { const parent = getPath(S.order, m[1]); if (parent && 'id' in parent) parent.id = ''; }
+      if (t.dataset.bind === 'duty.preparedDate' && $('#prepLbl') && isKey(t.value)) $('#prepLbl').textContent = thaiMini(t.value);
       if (t.dataset.bind === 'duty.contact.phone' && S.user) { try { localStorage.setItem('fo602_phone_' + S.user.username, t.value); } catch (e2) { /* ignore */ } }
       if (/\.(director|acCommander)\.(name|position|phone)$/.test(t.dataset.bind)) t.closest('.field').classList.toggle('missing', !t.value.trim());   // พิมพ์ชื่อเอง → ไม่ผูกกับรหัสในฐานข้อมูล
       markDirty();
