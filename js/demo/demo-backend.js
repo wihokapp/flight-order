@@ -4,7 +4,7 @@
  */
 (function (root) {
   'use strict';
-  const STATE_KEY = 'fo602_demo_state_v6';
+  const STATE_KEY = 'fo602_demo_state_v7';
 
   const DEMO_USERS = [
     ['admin', 'ผู้ดูแลระบบ (ทดลอง)', 'admin', 'admin1234'],
@@ -28,14 +28,14 @@
       ['ฝ่ายพนักงานต้อนรับบนอากาศยาน', 'CAB', 6, ['พ.อ.อ.หญิง', 'จ.อ.หญิง', 'จ.ท.หญิง']],
       ['ฝ่ายขนส่งประจำอากาศยาน', 'LOG', 5, ['ร.อ.', 'พ.อ.อ.', 'จ.อ.']],
     ];
-    const rows = [['ID', 'ฝ่าย', 'DeptCode', 'ยศ', 'ชื่อ-สกุล', 'เบอร์โทร']];
+    const rows = [['ID', 'ฝ่าย', 'DeptCode', 'ยศ', 'ชื่อ-สกุล', 'เบอร์โทร', 'ตำแหน่ง']];
     let k = 0;
     depts.forEach(([name, code, n, ranks]) => {
       for (let i = 1; i <= n; i++, k++) {
         const female = code === 'CAB';
         const first = female ? FIRST_F[(i * 3) % FIRST_F.length] : FIRST[(k * 7) % FIRST.length];
         const last = LAST[(k * 5 + i) % LAST.length];
-        rows.push([code + String(i).padStart(3, '0'), name, code, ranks[Math.min(i - 1, ranks.length - 1) % ranks.length], first + ' ' + last, '08' + String(10000000 + k * 7919).slice(-8).replace(/^(\d)(\d{3})(\d{4})$/, '$1-$2-$3')]);
+        rows.push([code + String(i).padStart(3, '0'), name, code, ranks[Math.min(i - 1, ranks.length - 1) % ranks.length], first + ' ' + last, '08' + String(10000000 + k * 7919).slice(-8).replace(/^(\d)(\d{3})(\d{4})$/, '$1-$2-$3'), code === 'OPS' ? (['ผบ.ฝูง.602', 'รอง ผบ.ฝูง.602', 'ผบ.หมวด', 'นายทหารยุทธการ', 'นักบินประจำฝูง'][Math.min(i - 1, 4)]) : '']);
       }
     });
     const hours = [['PilotID', 'ชื่อ (อัตโนมัติ)', 'รุ่น', 'ชม.รวม', 'ชม.ME', 'สถานะพระราชพาหนะ', 'ใช้งาน (Y/N)']];
