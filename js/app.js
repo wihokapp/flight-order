@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  const APP_VERSION = '1.9.6';   // ให้ตรงกับ VERSION ใน sw.js
+  const APP_VERSION = '1.9.9';   // ให้ตรงกับ VERSION ใน sw.js
 
   // ───────────────────────── Constants ─────────────────────────
   const ROLE_LABEL = { admin: 'ผู้ดูแลระบบ', scheduler: 'ผู้จัดบิน', commander: 'ผู้บังคับบัญชา', documents: 'ผู้ดูแลเอกสาร', viewer: 'ผู้ชม' };
@@ -82,7 +82,7 @@
   function blankStandby() { const s = {}; STBY_TYPES.forEach(([k, , n]) => s[k] = { on: false, pilots: Array.from({ length: n }, blankP) }); return s; }
   function blankMission() {
     return { id: rid(), aircraftTail: '', aircraftLabel: '', aircraftType: '', acRole: '', pairTail: '', pairLabel: '',
-      type: 'ภารกิจ', title: '', callsign: '', route: '', fuel: '',
+      type: 'ภารกิจ', title: '', callsign: '', route: '', fuelMode: 'tons', fuel: '', fuelText: '',
       times: { brief: '', tow: '', takeoff: '', towMode: 'tow' }, pax: '', parking: { out: '', ret: '' },
       director: blankVip(), acCommander: blankVip(), hospitality: { on: false, detail: '' }, crew: [], poc: '', dress: '', notes: '' };
   }
@@ -115,12 +115,20 @@
       times: Object.assign({ brief: '', tow: '', takeoff: '', towMode: 'tow' }, m.times), parking: Object.assign({ out: '', ret: '' }, m.parking),
       director: Object.assign(blankVip(), m.director), acCommander: Object.assign(blankVip(), m.acCommander),
       hospitality: Object.assign({ on: false, detail: '' }, m.hospitality),
+      fuelMode: ['tons', 'fob', 'other'].includes(m.fuelMode) ? m.fuelMode : 'tons',
       fuel: String(m.fuel || '').replace(/[^\d.]/g, ''),
+      fuelText: String(m.fuelText || ''),
       crew: (m.crew || []).map(c => Object.assign({ id: '', name: '', dept: '', role: '' }, c)),
     }));
     const out = Object.assign(blankOrder(), o, { duty, standby, missions });
     if (!out.noMission && !out.missions.length) out.missions = [blankMission()];
     return out;
+  }
+  /** ข้อความเชื้อเพลิงสำหรับแสดง/พิมพ์ */
+  function fuelLabel(m) {
+    if (m.fuelMode === 'fob') return 'FOB';
+    if (m.fuelMode === 'other') return String(m.fuelText || '').trim();
+    return m.fuel !== '' && m.fuel != null ? fmtFuel(m.fuel) + ' TONS' : '';
   }
   function fmtFuel(f) { const n = Number(f); return f === '' || isNaN(n) ? String(f) : (Number.isInteger(n) ? n.toFixed(1) : String(f)); }
   function optionsHtml(list, cur) {
@@ -338,10 +346,11 @@
   }
   /** ช่วงที่เปิดเป็นค่าเริ่มต้น (ตรงกับ defaultRange_ ฝั่ง server ยกเว้นผู้บังคับบัญชาที่ server หาชุดรอพิจารณาให้) */
   function defaultRangeLocal(c) {
-    const today = todayKey();
-    if (can('editOrder') || (S.user && S.user.role === 'documents')) return nextBatch(today);
-    if (S.user && S.user.role === 'commander' && c && c.lastRange) return c.lastRange;   // server จะหาชุดรอพิจารณาให้ตามหลัง
-    return { from: today, to: today };
+    // ทุกสิทธิ์เปิดที่วันถัดไป (ก่อนวันหยุด = ชุดถึงวันทำการถัดไป)
+    const nb = nextBatch(todayKey());
+    // ผู้บังคับบัญชา: แสดงชุดล่าสุดจาก cache ทันทีถ้ายังไม่ผ่านไป — server จะเปลี่ยนเป็นชุดที่รอพิจารณาให้ตามหลัง
+    if (S.user && S.user.role === 'commander' && c && c.lastRange && c.lastRange.to >= nb.from) return c.lastRange;
+    return nb;
   }
   function setRefreshing(on) {
     S.refreshing = on;
@@ -769,6 +778,15 @@
   }
   function vipBlock(i, key, label, v) {
     const miss = f => v.on && !String(v[f]).trim() ? 'missing' : '';
+    if (key === 'acCommander') {   // ผู้บังคับ บ. เลือกจากรายชื่อนักบิน → ตำแหน่ง/เบอร์ขึ้นอัตโนมัติ
+      const tk = typeKey(S.order.missions[i].aircraftType);
+      return `<div class="vip ${v.on ? 'on' : ''}"><label class="row"><input type="checkbox" data-bool="missions.${i}.${key}.on" ${v.on ? 'checked' : ''}> มี ${esc(label)}</label>
+      ${v.on ? `<div class="grid g3" style="margin-top:6px">
+        <div class="field ${miss('name')}"><span>ชื่อ *</span><div class="person"><input class="input" data-bind="missions.${i}.${key}.name" value="${esc(v.name)}" placeholder="พิมพ์หรือเลือกจากรายชื่อ">
+          <button class="btn icon ghost" data-act="pick-duty" data-path="missions.${i}.${key}" ${tk ? `data-tk="${esc(tk)}"` : ''} aria-label="เลือก${esc(label)}จากรายชื่อ">👤</button></div></div>
+        ${inp(`missions.${i}.${key}.position`, 'ตำแหน่ง *', v.position, '', miss('position'))}
+        ${inp(`missions.${i}.${key}.phone`, 'เบอร์โทร. *', v.phone, 'inputmode="tel"', miss('phone'))}</div>` : ''}</div>`;
+    }
     return `<div class="vip ${v.on ? 'on' : ''}"><label class="row"><input type="checkbox" data-bool="missions.${i}.${key}.on" ${v.on ? 'checked' : ''}> มี ${esc(label)}</label>
       ${v.on ? `<div class="grid g3" style="margin-top:6px">
         ${inp(`missions.${i}.${key}.name`, 'ชื่อ *', v.name, '', miss('name'))}
@@ -783,7 +801,7 @@
   function acSummaryHtml(list) {
     return list.length ? `<div class="tbl-wrap"><table class="tbl cards"><thead><tr><th>เครื่อง / แบบ</th><th>สถานะ</th><th>ข้อขัดข้อง / รายละเอียด</th><th>Plan Check</th></tr></thead><tbody>
       ${list.map(a => `<tr><td data-k="เครื่อง">${esc(a.tail)} / ${esc(a.type)}</td><td data-k="สถานะ"><span class="ac-status ${esc(a.status)}">${esc(a.status)}</span></td>
-        <td data-k="รายละเอียด">${esc(a.detail)}</td><td data-k="Plan Check">${esc(a.planCheck)}</td></tr>`).join('')}</tbody></table></div>`
+        <td data-k="รายละเอียด" class="ml">${esc(a.detail)}</td><td data-k="Plan Check">${esc(a.planCheck)}</td></tr>`).join('')}</tbody></table></div>`
       : '<p class="muted">ยังไม่มีข้อมูลเครื่องบิน</p>';
   }
   function editorHtml() {
@@ -827,7 +845,13 @@
           <div class="grid g4 keep2">
             <label class="field"><span>ประเภท</span><select data-bind="missions.${i}.type">${optionsHtml(MISSION_TYPES, m.type)}</select></label>
             ${inp(`missions.${i}.callsign`, 'Callsign', m.callsign, 'autocapitalize="characters"')}
-            <label class="field"><span>เชื้อเพลิง</span><span class="suffix"><input type="number" inputmode="decimal" step="0.1" min="0" data-bind="missions.${i}.fuel" value="${esc(m.fuel)}" placeholder="9.0"><em>TONS</em></span></label>
+            <div class="field"><span>เชื้อเพลิง</span>
+              <select data-bind="missions.${i}.fuelMode" data-rerender aria-label="รูปแบบเชื้อเพลิงภารกิจที่ ${i + 1}">
+                <option value="tons" ${m.fuelMode === 'tons' ? 'selected' : ''}>จำนวนตัน (TONS)</option>
+                <option value="fob" ${m.fuelMode === 'fob' ? 'selected' : ''}>FOB</option>
+                <option value="other" ${m.fuelMode === 'other' ? 'selected' : ''}>อื่น ๆ (ระบุ)</option></select>
+              ${m.fuelMode === 'tons' ? `<span class="suffix" style="margin-top:4px"><input type="number" inputmode="decimal" step="0.1" min="0" data-bind="missions.${i}.fuel" value="${esc(m.fuel)}" placeholder="9.0" aria-label="เชื้อเพลิง (ตัน)"><em>TONS</em></span>`
+                : m.fuelMode === 'other' ? `<input style="margin-top:4px" data-bind="missions.${i}.fuelText" value="${esc(m.fuelText)}" placeholder="ระบุเชื้อเพลิง" maxlength="100" aria-label="ระบุเชื้อเพลิง">` : ''}</div>
             ${inp(`missions.${i}.pax`, 'ผู้โดยสาร', m.pax, 'placeholder="เช่น 15/-"')}
           </div>
           <div class="grid g2">
@@ -961,6 +985,7 @@
             const t = getPath(S.order, opts.path);
             t.id = p.id; t.name = p.short;
             if ('phone' in t && p.phone) t.phone = p.phone;
+            if ('position' in t && p.position) t.position = p.position;
             markDirty(); close(null);
           }
         };
@@ -1001,7 +1026,7 @@
         ${two(cell('ประเภท', esc(x.type)), cell('Callsign', esc(x.callsign)))}
         ${full(cell('ภารกิจ', x.title, true))}
         ${two(cell('เส้นทางบิน', esc(x.route)), cell('ผู้โดยสาร', esc(x.pax)))}
-        ${two(cell('เวลา', times), cell('เชื้อเพลิง', x.fuel !== '' ? esc(fmtFuel(x.fuel)) + ' TONS' : ''))}
+        ${two(cell('เวลา', times), cell('เชื้อเพลิง', esc(fuelLabel(x))))}
         ${two(cell('จุดจอดขาไป', esc(x.parking.out)), cell('จุดจอดขากลับ', esc(x.parking.ret)))}
         ${two(cell('ผอ.เดินทาง', vip(x.director)), cell('ผู้บังคับ บ.', vip(x.acCommander)))}
         ${two(x.hospitality && x.hospitality.on ? cell('จัดรับรอง', x.hospitality.detail || 'มี', true) : cell('จัดรับรอง', 'ไม่มีจัดรับรอง'), cell('หมายเหตุ', x.notes, true))}
@@ -1025,7 +1050,7 @@
         <td>${o.standby[k].pilots.filter(p => p.name).map((p, j) => (j + 1) + '. ' + esc(p.name)).join(' &nbsp;&nbsp; ') || '—'}</td></tr>`).join('')}</tbody></table>` : ''}
       <div class="d-sec">สถานภาพเครื่องบินโดยรวม${st === 'RELEASED' && o.aircraftSnapshot ? ' (ณ เวลา release)' : ''}</div>
       <table><thead><tr><th style="width:20%">เครื่อง / แบบ</th><th style="width:11%">สถานะ</th><th>ข้อขัดข้อง / รายละเอียด</th><th style="width:24%">Plan Check</th></tr></thead><tbody>
-        ${ac.length ? ac.map(a => `<tr><td>${esc(a.tail)} / ${esc(a.type)}</td><td class="center ${esc(a.status)}"><b>${esc(a.status)}</b></td><td>${esc(a.detail)}</td><td>${esc(a.planCheck)}</td></tr>`).join('') : '<tr><td colspan="4" class="center">—</td></tr>'}
+        ${ac.length ? ac.map(a => `<tr><td>${esc(a.tail)} / ${esc(a.type)}</td><td class="center ${esc(a.status)}"><b>${esc(a.status)}</b></td><td class="ml">${esc(a.detail)}</td><td>${esc(a.planCheck)}</td></tr>`).join('') : '<tr><td colspan="4" class="center">—</td></tr>'}
       </tbody></table>
       <div class="d-sec d-sec-big">รายละเอียดภารกิจ${o.noMission ? ' — ไม่มีภารกิจ' : ' — <span>' + o.missions.length + ' ภารกิจ</span>'}</div>
       ${missions}
@@ -1367,7 +1392,7 @@
         <div class="lock-note">🔒 <span>ข้อมูลถูกล็อกเพื่อป้องกันการแก้ไขโดยไม่ตั้งใจ${can('editAircraft') ? ' — กด "แก้ไข" เพื่อปรับสถานภาพ' : ''}${latest ? `<br><span class="small muted">ปรับล่าสุด: ${esc(latest.updatedBy)} · ${esc(thaiTs(latest.updatedAt))}</span>` : ''}</span></div>
         <div class="tbl-wrap" style="margin-top:10px"><table class="tbl cards"><thead><tr><th>เครื่อง</th><th>แบบ</th><th>ชื่อ ทอ.</th><th>สถานะ</th><th>ข้อขัดข้อง / รายละเอียด</th><th>Plan Check</th></tr></thead><tbody>
           ${list.length ? list.map(a => `<tr><td data-k="เครื่อง"><b>${esc(a.tail)}</b></td><td data-k="แบบ">${esc(a.type)}</td><td data-k="ชื่อ ทอ.">${esc(a.designation)}</td>
-          <td data-k="สถานะ"><span class="ac-status ${esc(a.status)}">${esc(a.status)}</span></td><td data-k="รายละเอียด">${esc(a.detail)}</td><td data-k="Plan Check">${esc(a.planCheck)}</td></tr>`).join('')
+          <td data-k="สถานะ"><span class="ac-status ${esc(a.status)}">${esc(a.status)}</span></td><td data-k="รายละเอียด" class="ml">${esc(a.detail)}</td><td data-k="Plan Check">${esc(a.planCheck)}</td></tr>`).join('')
             : '<tr><td colspan="6" class="muted">ยังไม่มีข้อมูลเครื่องบิน</td></tr>'}
         </tbody></table></div></section>`;
       return;
@@ -1382,7 +1407,7 @@
         <td data-k="แบบ"><input data-ac="${i}.type" value="${esc(a.type)}" placeholder="ACJ320"></td>
         <td data-k="ชื่อ ทอ."><input data-ac="${i}.designation" value="${esc(a.designation)}" placeholder="บ.ล.15 ก"></td>
         <td data-k="สถานะ"><select data-ac="${i}.status">${AC_STATUS.map(s => `<option ${s === a.status ? 'selected' : ''}>${s}</option>`).join('')}${a.status && !AC_STATUS.includes(a.status) ? `<option selected>${esc(a.status)}</option>` : ''}</select></td>
-        <td data-k="รายละเอียด"><input data-ac="${i}.detail" value="${esc(a.detail)}"></td>
+        <td data-k="รายละเอียด"><textarea data-ac="${i}.detail" rows="3" placeholder="ไม่เกิน 3 บรรทัด">${esc(a.detail)}</textarea></td>
         <td data-k="Plan Check"><input data-ac="${i}.planCheck" value="${esc(a.planCheck)}"></td>
         <td><div class="row" style="gap:4px;flex-wrap:nowrap">${i > 0 ? `<button class="btn sm ghost" data-act="ac-up" data-i="${i}" aria-label="เลื่อนขึ้น">↑</button>` : ''}<button class="btn sm danger-ghost" data-act="ac-rm" data-i="${i}" aria-label="ลบ">✕</button></div></td>
       </tr>`).join('')}
@@ -1527,16 +1552,16 @@
     if (!S.crew.configured && !all.length) { el.innerHTML = '<div class="banner warn">ยังไม่ได้เชื่อม Google Sheets รายชื่อ (ผู้ดูแลระบบตั้งค่าได้ที่แท็บ "ตั้งค่า")</div>'; return; }
     const nAct = all.filter(p => p.active !== false).length;
     el.innerHTML = `<p class="small muted" style="margin:0 0 6px">ใช้งาน ${nAct} คน · ปิดใช้งาน ${all.length - nAct} คน · แสดง ${rows.length} คน</p>
-      <div class="tbl-wrap"><table class="tbl cards"><thead><tr><th>รหัส</th><th>ยศ</th><th>ชื่อ</th><th>นามสกุล</th><th>ชื่อในใบจัดบิน</th><th>สถานะ</th>${S.settings.lineConfigured ? '<th>LINE</th>' : ''}<th></th></tr></thead><tbody>
+      <div class="tbl-wrap"><table class="tbl cards"><thead><tr><th>รหัส</th><th>ยศ</th><th>ชื่อ</th><th>นามสกุล</th><th>ชื่อในใบจัดบิน</th><th>ตำแหน่ง / เบอร์</th><th>สถานะ</th>${S.settings.lineConfigured ? '<th>LINE</th>' : ''}<th></th></tr></thead><tbody>
       ${rows.length ? rows.map(p => `<tr class="${p.active === false ? 'muted' : ''}"><td data-k="รหัส">${esc(p.id)}</td><td data-k="ยศ">${esc(p.rank)}</td>
-        <td data-k="ชื่อ"><b>${esc(p.first)}</b></td><td data-k="นามสกุล">${esc(p.last)}</td><td data-k="ในใบ">${esc(p.short)}</td>
+        <td data-k="ชื่อ"><b>${esc(p.first)}</b></td><td data-k="นามสกุล">${esc(p.last)}</td><td data-k="ในใบ">${esc(p.short)}</td><td data-k="ตำแหน่ง/เบอร์" class="small">${esc(p.position || '—')}${p.phone ? '<br>' + esc(p.phone) : ''}</td>
         <td data-k="สถานะ">${p.active === false ? '<span class="chip DENIED">ปิดใช้งาน</span>' : '<span class="chip APPROVED">ใช้งาน</span>'}</td>
         ${S.settings.lineConfigured ? `<td data-k="LINE">${lineBadge('pilot:' + p.id)}</td>` : ''}
         <td><div class="row" style="gap:4px;flex-wrap:nowrap"><button class="btn sm ghost" data-act="pilot-edit" data-id="${esc(p.id)}">แก้ไข</button>
           ${S.settings.lineConfigured && p.active !== false ? `<button class="btn sm ghost" data-act="pilot-line" data-id="${esc(p.id)}" title="QR ลงทะเบียน LINE">QR LINE</button>` : ''}
           ${S.lineLinks && S.lineLinks.links && S.lineLinks.links['pilot:' + p.id] ? `<button class="btn sm ghost" data-act="pilot-line-unlink" data-id="${esc(p.id)}" data-name="${esc(p.short)}" title="ยกเลิกการเชื่อม LINE">✕ LINE</button>` : ''}
           <button class="btn sm ${p.active === false ? 'ghost' : 'danger-ghost'}" data-act="pilot-toggle" data-id="${esc(p.id)}">${p.active === false ? 'เปิดใช้งาน' : 'ปิดใช้งาน'}</button></div></td></tr>`).join('')
-        : '<tr><td colspan="8" class="muted">ไม่พบรายชื่อ</td></tr>'}</tbody></table></div>`;
+        : '<tr><td colspan="9" class="muted">ไม่พบรายชื่อ</td></tr>'}</tbody></table></div>`;
   }
   async function pilotForm(p) {
     const isNew = !p.id;
@@ -1545,7 +1570,8 @@
         <label class="field"><span>ยศ</span><input id="pf_rank" list="rankList" value="${esc(p.rank || '')}" placeholder="เช่น ร.อ." ${isNew ? 'autofocus' : ''}></label>
         <div class="grid g2"><label class="field"><span>ชื่อ</span><input id="pf_first" value="${esc(p.first || '')}"></label>
           <label class="field"><span>นามสกุล</span><input id="pf_last" value="${esc(p.last || '')}"></label></div>
-        <label class="field"><span>เบอร์โทร (คอลัมน์ F แท็บ Crew)</span><input id="pf_phone" value="${esc(p.phone || '')}" inputmode="tel" placeholder="08x-xxx-xxxx"></label>
+        <div class="grid g2"><label class="field"><span>เบอร์โทร (คอลัมน์ F แท็บ Crew)</span><input id="pf_phone" value="${esc(p.phone || '')}" inputmode="tel" placeholder="08x-xxx-xxxx"></label>
+          <label class="field"><span>ตำแหน่ง (ใช้กับ ผู้บังคับ บ.)</span><input id="pf_pos" value="${esc(p.position || '')}" placeholder="เช่น ผบ.ฝูง.602"></label></div>
         <div class="small">ชื่อที่จะแสดงในใบจัดบิน: <b id="pf_prev">${esc(p.short || '—')}</b></div>
         <div class="form-error" id="pf_err"></div></div>`,
       foot: [{ label: 'ยกเลิก', cls: 'ghost', value: null }, { label: isNew ? 'เพิ่มนักบิน' : 'บันทึก', cls: 'primary',
@@ -1554,7 +1580,7 @@
           if (miss.length) $('#pf_err', bg).textContent = 'กรุณากรอก ' + miss.join(', ');
           return !miss.length;
         },
-        value: bg => ({ id: p.id || '', rank: $('#pf_rank', bg).value.trim(), first: $('#pf_first', bg).value.trim(), last: $('#pf_last', bg).value.trim(), phone: $('#pf_phone', bg).value.trim() }) }],
+        value: bg => ({ id: p.id || '', rank: $('#pf_rank', bg).value.trim(), first: $('#pf_first', bg).value.trim(), last: $('#pf_last', bg).value.trim(), phone: $('#pf_phone', bg).value.trim(), position: $('#pf_pos', bg).value.trim() }) }],
       onOpen: bg => {
         const upd = () => { $('#pf_prev', bg).textContent = shortName($('#pf_rank', bg).value.trim(), $('#pf_first', bg).value.trim().replace(/\s+/g, ''), $('#pf_last', bg).value.trim()) || '—'; };
         ['pf_rank', 'pf_first', 'pf_last'].forEach(id => $('#' + id, bg).addEventListener('input', upd));
@@ -1835,7 +1861,12 @@
     if (t.dataset.bind && S.order && !t.closest('.modal-bg')) {
       setPath(S.order, t.dataset.bind, t.value);
       const m = t.dataset.bind.match(/^(.+)\.name$/);
-      if (m) {
+      if (m && /\.acCommander$/.test(m[1])) {
+        const parent = getPath(S.order, m[1]), hit = (S.crew.people || []).find(p => p.short === t.value.trim());
+        if (parent && hit) ['position', 'phone'].forEach(f => {
+          if (hit[f] && !String(parent[f] || '').trim()) { parent[f] = hit[f]; const el = document.querySelector(`[data-bind="${m[1]}.${f}"]`); if (el) el.value = hit[f]; }
+        });
+      } else if (m) {
         const parent = getPath(S.order, m[1]);
         if (parent && 'id' in parent) {
           parent.id = '';
@@ -1856,7 +1887,9 @@
     } else if (t.dataset.hol && holEdit) {
       const [i, f] = t.dataset.hol.split('.'); holEdit.list[+i][f] = t.value;
     } else if (t.dataset.ac && S.acEdit) {
-      const [i, f] = t.dataset.ac.split('.'); S.acEdit[+i][f] = t.value;
+      const [i, f] = t.dataset.ac.split('.');
+      if (f === 'detail') { const ls = t.value.split(/\r?\n/); if (ls.length > 3) { t.value = ls.slice(0, 3).join('\n'); toast('รายละเอียดได้ไม่เกิน 3 บรรทัดต่อเครื่อง'); } }
+      S.acEdit[+i][f] = t.value;
     }
   });
   document.addEventListener('change', async e => {
