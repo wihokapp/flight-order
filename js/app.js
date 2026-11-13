@@ -2,14 +2,14 @@
 (function () {
   'use strict';
 
-  const APP_VERSION = '1.9.9';   // ให้ตรงกับ VERSION ใน sw.js
+  const APP_VERSION = '2.0.0';   // ให้ตรงกับ VERSION ใน sw.js
 
   // ───────────────────────── Constants ─────────────────────────
-  const ROLE_LABEL = { admin: 'ผู้ดูแลระบบ', scheduler: 'ผู้จัดบิน', commander: 'ผู้บังคับบัญชา', documents: 'ผู้ดูแลเอกสาร', viewer: 'ผู้ชม' };
-  const STATUS_LABEL = { NEW: 'ยังไม่มีใบจัดบิน', DRAFT: 'ร่าง (กำลังจัดทำ)', PENDING: 'ขออนุมัติแล้ว · รอพิจารณา', APPROVED: 'อนุมัติแล้ว', DENIED: 'ไม่อนุมัติ', RELEASED: 'Release แล้ว' };
+  const ROLE_LABEL = { admin: 'ผู้ดูแลระบบ', scheduler: 'ผู้จัดบิน', reviewer: 'ผู้พิจารณา', commander: 'ผู้บังคับบัญชา', documents: 'ผู้ดูแลเอกสาร', viewer: 'ผู้ชม' };
+  const STATUS_LABEL = { NEW: 'ยังไม่มีใบจัดบิน', DRAFT: 'ร่าง (กำลังจัดทำ)', REVIEW: 'ส่งแล้ว · รอผู้พิจารณา', PENDING: 'ผ่านการพิจารณา · รออนุมัติ', APPROVED: 'อนุมัติแล้ว', DENIED: 'ไม่อนุมัติ / ส่งกลับแก้ไข', RELEASED: 'Release แล้ว' };
   const CAN = {
     editOrder: ['admin', 'scheduler'], release: ['admin', 'scheduler'], editAircraft: ['admin', 'scheduler'],
-    approve: ['admin', 'commander'], seeUnreleased: ['admin', 'scheduler', 'commander', 'documents'],
+    review: ['admin', 'reviewer'], approve: ['admin', 'commander'], seeUnreleased: ['admin', 'scheduler', 'reviewer', 'commander', 'documents'],
     manageUsers: ['admin'], settings: ['admin'], deleteOrder: ['admin'], managePilots: ['admin', 'scheduler'],
   };
   const DUTY_SINGLE = [['wingDuty', 'น.เวรกองบิน 6'], ['wingDutyAsst', 'ผช.น.เวร กองบิน 6'], ['controller', 'น.เวร Controller']];
@@ -171,7 +171,7 @@
     document.body.appendChild(el);
     setTimeout(() => el.remove(), err ? 5000 : 2600);
   }
-  const WRITE_ACTIONS = ['saveOrder', 'saveBatch', 'submitBatch', 'approveBatch', 'denyBatch', 'releaseBatch', 'reviseOrder', 'deleteOrder', 'approveOrder', 'denyOrder', 'releaseOrder'];
+  const WRITE_ACTIONS = ['saveOrder', 'saveBatch', 'submitBatch', 'reviewBatch', 'returnBatch', 'approveBatch', 'denyBatch', 'releaseBatch', 'reviseOrder', 'deleteOrder', 'approveOrder', 'denyOrder', 'releaseOrder'];
   async function api(action, params, opts) {
     opts = opts || {};
     if (!opts.quiet) busy(true);
@@ -349,7 +349,7 @@
     // ทุกสิทธิ์เปิดที่วันถัดไป (ก่อนวันหยุด = ชุดถึงวันทำการถัดไป)
     const nb = nextBatch(todayKey());
     // ผู้บังคับบัญชา: แสดงชุดล่าสุดจาก cache ทันทีถ้ายังไม่ผ่านไป — server จะเปลี่ยนเป็นชุดที่รอพิจารณาให้ตามหลัง
-    if (S.user && S.user.role === 'commander' && c && c.lastRange && c.lastRange.to >= nb.from) return c.lastRange;
+    if (S.user && ['commander', 'reviewer'].includes(S.user.role) && c && c.lastRange && c.lastRange.to >= nb.from) return c.lastRange;
     return nb;
   }
   function setRefreshing(on) {
@@ -594,7 +594,7 @@
         <div class="small muted" style="padding:6px 12px">${esc(u.username)} · ${esc(ROLE_LABEL[u.role])}<br>เวอร์ชัน ${APP_VERSION}</div>
         <button data-act="change-pw">🔑 เปลี่ยนรหัสผ่าน</button>
         <button data-act="refresh-crew">↻ โหลดรายชื่อนักบินล่าสุด</button>
-        ${S.settings.lineConfigured && ['admin', 'scheduler', 'commander'].includes(u.role) ? '<button data-act="line-self">🔔 รับแจ้งเตือนทาง LINE</button>' : ''}
+        ${S.settings.lineConfigured && ['admin', 'scheduler', 'reviewer', 'commander'].includes(u.role) ? '<button data-act="line-self">🔔 รับแจ้งเตือนทาง LINE</button>' : ''}
         ${API.DEMO && S.settings.lineConfigured ? '<button data-act="line-demo-log">📨 ข้อความ LINE ที่ส่ง (ทดลอง)</button>' : ''}
         ${API.DEMO ? '<button data-act="demo-reset">🧪 รีเซ็ตข้อมูลทดลอง</button>' : ''}
         <button data-act="logout">⎋ ออกจากระบบ</button>
@@ -622,7 +622,7 @@
   }
   /** สรุปสถานะทั้งชุด สำหรับเปิด/ปิดปุ่มระดับชุด */
   function batchInfo() {
-    const days = dayList(), c = { NEW: 0, DRAFT: 0, PENDING: 0, APPROVED: 0, DENIED: 0, RELEASED: 0 };
+    const days = dayList(), c = { NEW: 0, DRAFT: 0, REVIEW: 0, PENDING: 0, APPROVED: 0, DENIED: 0, RELEASED: 0 };
     days.forEach(d => c[statusOf(d)]++);
     const existing = days.filter(d => d.meta && d.meta.exists && !d.meta.hidden);
     return {
@@ -630,9 +630,11 @@
       dirty: days.some(d => d.dirty),
       toSave: days.filter(d => dayEditable(d) && (d.dirty || !(d.meta && d.meta.exists))),
       submittable: can('editOrder') && c.NEW === 0 && (c.DRAFT + c.DENIED) > 0,
-      approvable: can('approve') && c.NEW === 0 && c.DRAFT === 0 && c.PENDING > 0,
-      deniable: can('approve') && c.NEW === 0 && c.DRAFT === 0 && (c.PENDING + c.APPROVED) > 0,
-      releasable: can('release') && c.NEW === 0 && c.DRAFT === 0 && c.PENDING === 0 && c.DENIED === 0 && c.APPROVED > 0,
+      reviewable: can('review') && c.NEW + c.DRAFT + c.DENIED === 0 && c.REVIEW > 0,
+      returnable: can('review') && c.NEW + c.DRAFT === 0 && (c.REVIEW + c.PENDING) > 0,
+      approvable: can('approve') && c.NEW + c.DRAFT + c.REVIEW + c.DENIED === 0 && c.PENDING > 0,
+      deniable: can('approve') && c.NEW + c.DRAFT + c.REVIEW === 0 && (c.PENDING + c.APPROVED) > 0,
+      releasable: can('release') && c.NEW + c.DRAFT + c.REVIEW + c.PENDING + c.DENIED === 0 && c.APPROVED > 0,
       items: st => existing.filter(d => st.includes(d.meta.status)).map(d => ({ date: d.date, version: d.meta.version })),
       printable: days.filter(d => d.order && !(d.meta && d.meta.hidden) && (d.meta.exists || d.dirty)),
     };
@@ -644,17 +646,23 @@
     const summary = Object.keys(b.c).filter(k => b.c[k]).map(k => `<span class="chip ${k}">${esc(STATUS_LABEL[k])} ${b.multi ? b.c[k] : ''}</span>`).join(' ');
     let batchBanner = '';
     const thing = b.multi ? 'ชุดใบจัดบินนี้' : 'ใบจัดบินนี้';
-    if (can('approve') && !can('editOrder') && (b.c.DRAFT || b.c.NEW)) {
-      batchBanner = `<div class="banner warn">${thing}ผู้จัดบินยังจัดทำไม่เสร็จ${b.multi ? ` (${b.c.DRAFT + b.c.NEW} วัน)` : ''} — จะพิจารณาได้เมื่อผู้จัดบินกด "ส่งขออนุมัติ"</div>`;
-    } else if (can('approve') && !can('editOrder') && b.c.PENDING) {
-      batchBanner = `<div class="banner warn">${thing}ส่งขออนุมัติแล้ว รอการพิจารณาของท่าน</div>`;
+    const role = S.user && S.user.role;
+    if (role === 'reviewer') {
+      if (b.c.DRAFT || b.c.NEW || b.c.DENIED) batchBanner = `<div class="banner warn">${thing}ผู้จัดบินยังจัดทำไม่เสร็จ — จะพิจารณาได้เมื่อผู้จัดบินกด "ส่งพิจารณา"</div>`;
+      else if (b.c.REVIEW) batchBanner = `<div class="banner warn">${thing}ส่งมาแล้ว <b>รอการพิจารณาของท่าน</b> — ตรวจแล้วกด "พิจารณาแล้ว · ส่งขออนุมัติ" หรือ "ส่งกลับแก้ไข"</div>`;
+      else if (b.c.PENDING) batchBanner = `<div class="banner info">${thing}ผ่านการพิจารณาแล้ว — รอผู้บังคับบัญชาอนุมัติ</div>`;
+    } else if (role === 'commander') {
+      if (b.c.DRAFT || b.c.NEW || b.c.REVIEW || b.c.DENIED) batchBanner = `<div class="banner warn">${thing}ยังไม่ผ่านผู้พิจารณา${b.c.REVIEW ? ' (อยู่ระหว่างพิจารณา)' : ''} — จะอนุมัติได้เมื่อผู้พิจารณาส่งขออนุมัติ</div>`;
+      else if (b.c.PENDING) batchBanner = `<div class="banner warn">${thing}ผ่านการพิจารณาแล้ว <b>รอการอนุมัติของท่าน</b></div>`;
     }
     if (can('editOrder') && b.c.DRAFT + b.c.DENIED) {
-      batchBanner += `<div class="banner info">${thing}ยังเป็นร่าง — ผู้บังคับบัญชาจะพิจารณาได้เมื่อกด <b>📨 ส่งขออนุมัติ</b>${b.c.NEW ? ` (ต้องบันทึกให้ครบทุกวันก่อน)` : ''}</div>`;
+      batchBanner += `<div class="banner info">${thing}ยังเป็นร่าง — กด <b>📨 ส่งพิจารณา</b> เพื่อส่งให้ผู้พิจารณาตรวจก่อนส่งขออนุมัติ${b.c.NEW ? ` (ต้องบันทึกให้ครบทุกวันก่อน)` : ''}</div>`;
+    } else if (can('editOrder') && b.c.REVIEW) {
+      batchBanner += `<div class="banner info">ส่งพิจารณาแล้ว — รอผู้พิจารณาตรวจ (ถ้าแก้ไขอีก จะกลับเป็นร่างและต้องส่งใหม่)</div>`;
     } else if (can('editOrder') && b.c.PENDING && !b.c.APPROVED) {
-      batchBanner += `<div class="banner info">ส่งขออนุมัติแล้ว — รอผู้บังคับบัญชาพิจารณา (ถ้าแก้ไขอีก จะกลับเป็นร่างและต้องส่งใหม่)</div>`;
+      batchBanner += `<div class="banner info">ผ่านการพิจารณาแล้ว — รอผู้บังคับบัญชาอนุมัติ (ถ้าแก้ไขอีก จะกลับเป็นร่างและต้องส่งใหม่)</div>`;
     }
-    if (b.multi && can('release') && b.c.APPROVED && !b.releasable && b.c.NEW + b.c.DRAFT + b.c.PENDING + b.c.DENIED) {
+    if (b.multi && can('release') && b.c.APPROVED && !b.releasable && b.c.NEW + b.c.DRAFT + b.c.REVIEW + b.c.PENDING + b.c.DENIED) {
       batchBanner += `<div class="banner info">Release ทั้งชุดได้เมื่อทุกวันในชุดได้รับอนุมัติแล้ว</div>`;
     }
 
@@ -665,7 +673,9 @@
     }
     if (b.printable.length) actions.push(`<button class="btn ghost" data-act="print-all">🖨️ พิมพ์ / PDF${b.multi ? ' (' + b.printable.length + ' วัน)' : ''}</button>`);
     actions.push('<span class="sep"></span>');
-    if (b.submittable) actions.push(`<button class="btn rel" data-act="submit"${dis}>📨 ส่งขออนุมัติ${sfx}</button>`);
+    if (b.submittable) actions.push(`<button class="btn rel" data-act="submit"${dis}>📨 ส่งพิจารณา${sfx}</button>`);
+    if (b.reviewable) actions.push(`<button class="btn ok" data-act="review"${dis}>✔ พิจารณาแล้ว · ส่งขออนุมัติ${sfx}</button>`);
+    if (b.returnable) actions.push(`<button class="btn bad" data-act="return"${dis}>↩ ส่งกลับแก้ไข${sfx}</button>`);
     if (b.approvable) actions.push(`<button class="btn ok" data-act="approve"${dis}>✔ อนุมัติ${sfx}</button>`);
     if (b.deniable) actions.push(`<button class="btn bad" data-act="deny"${dis}>✖ ไม่อนุมัติ${sfx}</button>`);
     if (b.releasable) actions.push(`<button class="btn rel" data-act="release"${dis}>🚀 Release${sfx}</button>`);
@@ -738,7 +748,7 @@
   function activeDay() { return { date: S.date, order: S.order, meta: S.meta, dirty: S.dirty }; }
 
   function logHtml(log) {
-    const L = { create: 'สร้าง', edit: 'แก้ไข', submit: 'ส่งขออนุมัติ', approve: 'อนุมัติ', deny: 'ไม่อนุมัติ', release: 'Release', revise: 'เปิดแก้ไข' };
+    const L = { create: 'สร้าง', edit: 'แก้ไข', submit: 'ส่งพิจารณา', review: 'ผ่านการพิจารณา · ส่งขออนุมัติ', return: 'ส่งกลับแก้ไข', approve: 'อนุมัติ', deny: 'ไม่อนุมัติ', release: 'Release', revise: 'เปิดแก้ไข' };
     return `<section class="card"><details><summary class="card-head" style="cursor:pointer;margin:0"><h2>ประวัติการดำเนินการของวันนี้ (${log.length})</h2></summary>
       <ul class="log" style="margin-top:8px">${log.slice().reverse().map(l => `<li><span class="muted">${esc(thaiTs(l.at))}</span>
       <span><b>${esc(L[l.action] || l.action)}</b> · ${esc(l.by)}${l.note ? ' — ' + esc(l.note) : ''}</span></li>`).join('')}</ul></details></section>`;
@@ -1006,7 +1016,8 @@
     const namesTel = arr => (arr || []).filter(p => p.name).map(p => esc(p.name) + (p.phone ? ' <span class="tel">โทร. ' + esc(p.phone) + '</span>' : '')).join('<br>') || '—';
     const ri = Number(d.refuelIdx);
     const refuel = ri >= 0 && d.documents[ri] && d.documents[ri].name ? esc(d.documents[ri].name) : '—';
-    const stamp = st === 'RELEASED' ? 'RELEASED · Rev.' + m.revision : st === 'APPROVED' ? 'อนุมัติแล้ว · ยังไม่ release' : st === 'DENIED' ? 'ไม่อนุมัติ' : st === 'PENDING' ? 'ขออนุมัติ · รอพิจารณา' : 'ร่าง · ยังไม่ขออนุมัติ';
+    const returned = st === 'DENIED' && m.reviewedBy && !m.approvedBy;
+    const stamp = st === 'RELEASED' ? 'RELEASED · Rev.' + m.revision : st === 'APPROVED' ? 'อนุมัติแล้ว · ยังไม่ release' : st === 'DENIED' ? (returned ? 'ส่งกลับแก้ไข' : 'ไม่อนุมัติ') : st === 'PENDING' ? 'ผ่านการพิจารณา · รออนุมัติ' : st === 'REVIEW' ? 'รอผู้พิจารณา' : 'ร่าง · ยังไม่ส่งพิจารณา';
     const row = (l, v, raw) => (v == null || v === '' ? '' : `<tr><td class="l">${esc(l)}</td><td class="${raw ? 'pre' : ''}">${raw ? esc(v) : v}</td></tr>`);
     const vip = v => (v && v.on ? `${esc(v.name)}${v.position ? ' · ' + esc(v.position) : ''}${v.phone ? ' · โทร. ' + esc(v.phone) : ''}` : '');
     const stbyOn = STBY_TYPES.filter(([k]) => o.standby[k] && o.standby[k].on);
@@ -1034,7 +1045,7 @@
         ${two(cell('POC', esc(x.poc)), cell('การแต่งกาย', esc(x.dress)))}
         </tbody></table></div>`;
     }).join('');
-    const apprStatus = { NEW: 'ยังไม่บันทึก', DRAFT: 'ร่าง — ยังไม่ส่งขออนุมัติ', PENDING: 'PENDING — รอพิจารณา', APPROVED: 'APPROVED — อนุมัติ', DENIED: 'DENIED — ไม่อนุมัติ', RELEASED: 'APPROVED — อนุมัติ / RELEASED' }[st];
+    const apprStatus = { NEW: 'ยังไม่บันทึก', DRAFT: 'ร่าง — ยังไม่ส่งพิจารณา', REVIEW: 'รอผู้พิจารณา', PENDING: 'ผ่านการพิจารณา — รออนุมัติ', APPROVED: 'APPROVED — อนุมัติ', DENIED: returned ? 'ส่งกลับแก้ไข (ผู้พิจารณา)' : 'DENIED — ไม่อนุมัติ', RELEASED: 'APPROVED — อนุมัติ / RELEASED' }[st];
     return `<div class="doc">
       <div class="d-stamp ${st}">${esc(stamp)}</div>
       <div class="d-title">${esc(S.settings.unitTitle || o.title)}</div>
@@ -1057,8 +1068,10 @@
       ${o.remarks ? `<div class="d-sec">หมายเหตุ</div><table><tbody><tr><td class="pre">${esc(o.remarks)}</td></tr></tbody></table>` : ''}
       <div class="d-approval"><div class="d-sec">การพิจารณาใบจัดบิน</div>
         <table><tbody>
-          <tr><td class="l">สถานะ</td><td class="appr ${st === 'APPROVED' || st === 'RELEASED' ? 'ok' : st === 'DENIED' ? 'bad' : 'wait'}"><b>${esc(apprStatus)}</b></td><td class="l">ผู้พิจารณา</td><td>${esc(m.approvedBy || '')}</td></tr>
-          <tr><td class="l">วันที่ / เวลา</td><td>${esc(thaiTs(m.approvedAt))}</td><td class="l">${st === 'DENIED' ? 'เหตุผล' : 'Release โดย'}</td><td>${st === 'DENIED' ? esc(m.denyReason) : esc(m.releasedBy ? m.releasedBy + ' · ' + thaiTs(m.releasedAt) : '')}</td></tr>
+          <tr><td class="l">สถานะ</td><td colspan="3" class="appr ${st === 'APPROVED' || st === 'RELEASED' ? 'ok' : st === 'DENIED' ? 'bad' : 'wait'}"><b>${esc(apprStatus)}</b></td></tr>
+          <tr><td class="l">ผู้พิจารณา</td><td>${esc(m.reviewedBy || '')}${m.reviewedAt ? '<br><span class="small">' + esc(thaiTs(m.reviewedAt)) + '</span>' : ''}</td>
+            <td class="l">ผู้อนุมัติ</td><td>${esc(m.approvedBy || '')}${m.approvedAt ? '<br><span class="small">' + esc(thaiTs(m.approvedAt)) + '</span>' : ''}</td></tr>
+          <tr><td class="l">${st === 'DENIED' ? 'เหตุผล' : 'Release โดย'}</td><td colspan="3">${st === 'DENIED' ? esc(m.denyReason) : esc(m.releasedBy ? m.releasedBy + ' · ' + thaiTs(m.releasedAt) : '')}</td></tr>
         </tbody></table></div>
       <div class="d-foot"><span>พิมพ์โดย ${esc(S.user.displayName)} · ${esc(thaiTs(ymd(new Date()) + ' ' + new Date().toTimeString().slice(0, 5)))}</span><span>${m.exists ? 'Rev.' + esc(m.revision) + ' · v' + esc(m.version) : 'ยังไม่บันทึก'}${day.dirty ? ' · มีการแก้ไขที่ยังไม่บันทึก' : ''}</span></div>
     </div>`;
@@ -1176,7 +1189,7 @@
       }),
       send: () => api('saveBatch', { days: payload, batchDates: S.range.slice() }, { quiet: true, silent: true }),
       done: r => applyServerDays(r.days),
-      okMsg: quiet ? '' : 'บันทึกร่างแล้ว' + (b.multi ? ' ' + n + ' วัน' : '') + ' — กด "ส่งขออนุมัติ" เมื่อจัดทำเสร็จ',
+      okMsg: quiet ? '' : 'บันทึกร่างแล้ว' + (b.multi ? ' ' + n + ' วัน' : '') + ' — กด "ส่งพิจารณา" เมื่อจัดทำเสร็จ',
       fail: async e => {
         if (e.code === 'CONFLICT' || e.code === 'LOCKED') {
           const go = await modal({ title: 'มีผู้อื่นแก้ไขใบจัดบิน', body: `<p>${esc(e.message)}</p><p>ยังไม่มีวันใดถูกบันทึก ร่างของคุณถูกเก็บไว้ในเครื่องนี้ — โหลดใหม่แล้วกด "กู้คืนร่าง" ในแต่ละวันเพื่อเทียบได้</p>`,
@@ -1240,15 +1253,35 @@
       if (writeBusy()) return;
       if (batchInfo().dirty && !(await saveAll(true))) return;   // บันทึกก่อนส่ง
       const b = batchInfo();
-      if (!b.submittable) { toast('ต้องบันทึกใบจัดบินให้ครบทุกวันก่อนส่งขออนุมัติ', true); return; }
+      if (!b.submittable) { toast('ต้องบันทึกใบจัดบินให้ครบทุกวันก่อนส่งพิจารณา', true); return; }
       const items = b.items(['DRAFT', 'DENIED']), warn = incompleteList(b.days.filter(d => ['DRAFT', 'DENIED'].includes(statusOf(d))));
-      const note = await modal({ title: 'ส่งขออนุมัติ' + (b.multi ? 'ทั้งชุด' : ''), body: `<p>ส่งใบจัดบิน <b>${esc(rangeLabel())}</b> ให้ผู้บังคับบัญชาพิจารณา</p>
+      const note = await modal({ title: 'ส่งพิจารณา' + (b.multi ? 'ทั้งชุด' : ''), body: `<p>ส่งใบจัดบิน <b>${esc(rangeLabel())}</b> ให้ผู้พิจารณาตรวจ — เมื่อผ่านแล้วผู้พิจารณาจะส่งขออนุมัติต่อ</p>
         ${warn.length ? `<div class="banner warn" style="margin-top:0"><b>ตรวจก่อนส่ง — รายการที่ยังว่าง:</b><ul class="small" style="margin:6px 0 0;padding-left:18px">${warn.map(w => '<li>' + w + '</li>').join('')}</ul></div>` : ''}
-        <p class="small muted">หลังส่งแล้ว ถ้าแก้ไขอีก ใบจะกลับเป็นร่างและต้องส่งขออนุมัติใหม่</p>
-        <label class="field"><span>ข้อความถึงผู้บังคับบัญชา (ถ้ามี)</span><textarea id="sbNote" rows="2"></textarea></label>`,
-        foot: [{ label: 'ยกเลิก', cls: 'ghost', value: null }, { label: '📨 ส่งขออนุมัติ', cls: 'rel', value: bg => $('#sbNote', bg).value }] });
+        <p class="small muted">หลังส่งแล้ว ถ้าแก้ไขอีก ใบจะกลับเป็นร่างและต้องส่งพิจารณาใหม่</p>
+        <label class="field"><span>ข้อความถึงผู้พิจารณา (ถ้ามี)</span><textarea id="sbNote" rows="2"></textarea></label>`,
+        foot: [{ label: 'ยกเลิก', cls: 'ghost', value: null }, { label: '📨 ส่งพิจารณา', cls: 'rel', value: bg => $('#sbNote', bg).value }] });
       if (note == null) return;
-      await batchWrite('ส่งขออนุมัติ', 'submitBatch', { note }, items, 'PENDING', null, 'ส่งขออนุมัติแล้ว');
+      await batchWrite('ส่งพิจารณา', 'submitBatch', { note }, items, 'REVIEW', { reviewedBy: '', reviewedAt: '' }, 'ส่งพิจารณาแล้ว');
+    },
+    review: async () => {
+      if (writeBusy() || !requireSaved()) return;
+      const b = batchInfo(), items = b.items(['REVIEW']);
+      const note = await modal({ title: 'พิจารณาแล้ว · ส่งขออนุมัติ' + (b.multi ? 'ทั้งชุด' : ''), body: `<p>ยืนยันว่าตรวจใบจัดบิน <b>${esc(rangeLabel())}</b> แล้ว และส่งให้ผู้บังคับบัญชาอนุมัติ</p>
+        ${b.multi ? `<ul class="small">${b.days.map(d => `<li>${esc(dayShort(d.date))} — ${d.order && d.order.noMission ? 'ไม่มีภารกิจ' : (d.order ? d.order.missions.length + ' ภารกิจ' : '')}</li>`).join('')}</ul>` : ''}
+        <label class="field"><span>ข้อความถึงผู้บังคับบัญชา (ถ้ามี)</span><textarea id="rvNote" rows="2"></textarea></label>`,
+        foot: [{ label: 'ยกเลิก', cls: 'ghost', value: null }, { label: '✔ ส่งขออนุมัติ', cls: 'ok', value: bg => $('#rvNote', bg).value }] });
+      if (note == null) return;
+      await batchWrite('ส่งขออนุมัติ', 'reviewBatch', { note }, items, 'PENDING', { reviewedBy: S.user.displayName, reviewedAt: nowTs(), approvedBy: '', approvedAt: '', denyReason: '' }, 'ผ่านการพิจารณา ส่งขออนุมัติแล้ว');
+    },
+    return: async () => {
+      if (writeBusy() || !requireSaved()) return;
+      const b = batchInfo(), items = b.items(['REVIEW', 'PENDING']);
+      const reason = await modal({ title: 'ส่งกลับแก้ไข' + (b.multi ? 'ทั้งชุด' : ''), body: `<p>${esc(rangeLabel())}</p>
+        <label class="field"><span>สิ่งที่ต้องแก้ไข (จำเป็น)${b.multi ? ' — ระบุวันที่ต้องแก้ได้' : ''}</span><textarea id="rtR" rows="4" autofocus></textarea></label><div class="form-error" id="rtE"></div>`,
+        foot: [{ label: 'ยกเลิก', cls: 'ghost', value: null }, { label: '↩ ส่งกลับแก้ไข', cls: 'bad', value: bg => $('#rtR', bg).value.trim(),
+          validate: bg => { const ok = !!$('#rtR', bg).value.trim(); if (!ok) $('#rtE', bg).textContent = 'กรุณาระบุสิ่งที่ต้องแก้ไข'; return ok; } }] });
+      if (!reason) return;
+      await batchWrite('ส่งกลับแก้ไข', 'returnBatch', { reason }, items, 'DENIED', { reviewedBy: S.user.displayName, reviewedAt: nowTs(), approvedBy: '', approvedAt: '', denyReason: reason }, 'ส่งกลับแก้ไขแล้ว');
     },
     blank: async () => {
       if (!(await confirmBox('ล้างเป็นหน้าว่าง', 'ล้างข้อมูลของ' + esc(thaiDate(S.date)) + 'ให้เป็นใบว่าง (ยังไม่บันทึกจนกว่าจะกด "บันทึก")', 'ล้างข้อมูล', 'bad'))) return;
@@ -1283,7 +1316,7 @@
     'draft-discard': () => { S.draftOffer = null; clearDraft(); renderView(); },
     approve: async () => {
       if (writeBusy() || !requireSaved()) return;
-      const b = batchInfo(), items = b.items(['PENDING', 'DENIED', 'APPROVED']);
+      const b = batchInfo(), items = b.items(['PENDING', 'APPROVED']);
       const note = await modal({ title: b.multi ? 'อนุมัติทั้งชุด' : 'อนุมัติใบจัดบิน', body: `<p>ยืนยันอนุมัติใบจัดบิน <b>${esc(rangeLabel())}</b></p>
         ${b.multi ? `<ul class="small">${b.days.map(d => `<li>${esc(dayShort(d.date))} — ${d.order && d.order.noMission ? 'ไม่มีภารกิจ' : (d.order ? d.order.missions.length + ' ภารกิจ' : '')} (${esc(STATUS_LABEL[statusOf(d)])})</li>`).join('')}</ul>` : ''}
         <label class="field"><span>หมายเหตุ (ถ้ามี)</span><textarea id="apNote" rows="2"></textarea></label>`,
@@ -1672,7 +1705,7 @@
     await loadLineLinks();
     if (!S.lineLinks || !S.lineLinks.configured) { toast('ผู้ดูแลระบบยังไม่ได้ตั้งค่า LINE OA', true); return; }
     if (S.lineLinks.me === 'active') {
-      const v = await modal({ title: 'แจ้งเตือนทาง LINE', body: `<p>บัญชีของท่านเชื่อม LINE แล้ว ✅</p><p class="small muted">${S.user.role === 'commander' ? 'จะได้รับแจ้งเมื่อมีใบจัดบินส่งขออนุมัติ' : 'จะได้รับแจ้งเมื่อใบจัดบินที่ท่านส่งขออนุมัติได้รับอนุมัติหรือไม่อนุมัติ'}</p>`,
+      const v = await modal({ title: 'แจ้งเตือนทาง LINE', body: `<p>บัญชีของท่านเชื่อม LINE แล้ว ✅</p><p class="small muted">${S.user.role === 'commander' ? 'จะได้รับแจ้งเมื่อมีใบจัดบินผ่านการพิจารณาและส่งขออนุมัติ' : S.user.role === 'reviewer' ? 'จะได้รับแจ้งเมื่อมีใบจัดบินส่งมาให้พิจารณา' : 'จะได้รับแจ้งเมื่อใบจัดบินที่ท่านส่งถูกส่งกลับแก้ไข ได้รับอนุมัติ หรือไม่อนุมัติ'}</p>`,
         foot: [{ label: 'ยกเลิกการเชื่อม', cls: 'danger-ghost', value: 'unlink' }].concat(can('settings') ? [{ label: 'ส่งข้อความทดสอบ', cls: 'ghost', value: 'test' }] : [], [{ label: 'ปิด', cls: 'primary', value: null }]) });
       if (v === 'unlink') { await api('lineUnlink', { key: 'user:' + S.user.username }); toast('ยกเลิกการเชื่อม LINE แล้ว'); }
       if (v === 'test') { await api('lineTest', {}); toast('ส่งข้อความทดสอบแล้ว'); }
@@ -1710,7 +1743,7 @@
           <td data-k="สถานะ">${u.active ? (u.mustChange ? '<span class="chip PENDING">รอเปลี่ยนรหัส</span>' : '<span class="chip APPROVED">ใช้งาน</span>') : '<span class="chip DENIED">ปิดใช้งาน</span>'}</td>
           ${S.settings.lineConfigured ? `<td data-k="LINE">${lineBadge('user:' + u.username)}</td>` : ''}
           <td data-k="ล่าสุด" class="small">${esc(thaiTs(u.lastLogin)) || '—'}</td>
-          <td><div class="row" style="gap:4px"><button class="btn sm ghost" data-act="user-edit" data-i="${i}">แก้ไข</button><button class="btn sm ghost" data-act="user-reset" data-i="${i}">รีเซ็ตรหัส</button>${S.settings.lineConfigured && ['admin', 'scheduler', 'commander'].includes(u.role) ? `<button class="btn sm ghost" data-act="user-line" data-u="${esc(u.username)}">QR LINE</button>` : ''}</div></td></tr>`).join('')}
+          <td><div class="row" style="gap:4px"><button class="btn sm ghost" data-act="user-edit" data-i="${i}">แก้ไข</button><button class="btn sm ghost" data-act="user-reset" data-i="${i}">รีเซ็ตรหัส</button>${S.settings.lineConfigured && ['admin', 'scheduler', 'reviewer', 'commander'].includes(u.role) ? `<button class="btn sm ghost" data-act="user-line" data-u="${esc(u.username)}">QR LINE</button>` : ''}</div></td></tr>`).join('')}
       </tbody></table></div>`;
     } catch (e) { const el = $('#uList'); if (el) el.innerHTML = `<p class="form-error">${esc(e.message)}</p>`; }
   }
@@ -1775,7 +1808,7 @@
             <input name="lineGroupId" value="${esc(st.lineGroupId || '')}" placeholder="C1234567890abcdef…" autocomplete="off" spellcheck="false"></label>
           <label class="field"><span>ลิงก์แอป (ใส่ในข้อความแจ้งเตือน)</span><input name="appUrl" value="${esc(st.appUrl || (location.origin + location.pathname))}" placeholder="https://<user>.github.io/<repo>/"></label>
           <div class="small muted">Webhook URL ที่ต้องใส่ใน LINE Developers (เปิด Use webhook):<br><code class="sel">${esc((window.APP_CONFIG && window.APP_CONFIG.API_URL) || '(โหมดทดลอง)')}</code><br>
-            แจ้งเตือน: release → นักบินในใบ + สรุปเข้ากลุ่ม · ส่งขออนุมัติ → ผู้บังคับบัญชา · อนุมัติ/ไม่อนุมัติ → ผู้ที่ส่งขออนุมัติ<br>
+            แจ้งเตือน: ส่งพิจารณา → ผู้พิจารณา · ผ่านการพิจารณา → ผู้บังคับบัญชา · ส่งกลับแก้ไข/อนุมัติ/ไม่อนุมัติ → ผู้จัดบินที่ส่ง · release → นักบินในใบ + สรุปเข้ากลุ่ม<br>
             กลุ่ม: เปิด "Allow bot to join group chats" ใน LINE Developers แล้วเชิญ OA เข้ากลุ่ม — OA จะตอบ Group ID ของกลุ่มให้</div>
           <div class="form-error" id="lnErr"></div>
           <div class="row"><button class="btn primary" type="submit">บันทึกและตรวจ token</button>
@@ -1969,7 +2002,7 @@
         const rg = defaultRangeLocal(c), cached = cachedRange(rg.from, rg.to);
         if (cached) {
           S.date = rg.from; setRange(cached, true); S.refreshing = true; render();
-          bootstrap(S.user.role === 'commander' ? {} : rg, { background: true, token: S.loadToken || 0 }).catch(e => {
+          bootstrap(['commander', 'reviewer'].includes(S.user.role) ? {} : rg, { background: true, token: S.loadToken || 0 }).catch(e => {
             setRefreshing(false);
             if (e.code !== 'AUTH') toast('ยังเชื่อมต่อเซิร์ฟเวอร์ไม่ได้ — กำลังแสดงข้อมูลที่บันทึกไว้ในเครื่อง', true);
           });
