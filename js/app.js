@@ -2,7 +2,7 @@
 (function () {
   'use strict';
 
-  const APP_VERSION = '2.0.0';   // ให้ตรงกับ VERSION ใน sw.js
+  const APP_VERSION = '2.0.1';   // ให้ตรงกับ VERSION ใน sw.js
 
   // ───────────────────────── Constants ─────────────────────────
   const ROLE_LABEL = { admin: 'ผู้ดูแลระบบ', scheduler: 'ผู้จัดบิน', reviewer: 'ผู้พิจารณา', commander: 'ผู้บังคับบัญชา', documents: 'ผู้ดูแลเอกสาร', viewer: 'ผู้ชม' };
@@ -45,7 +45,12 @@
   const esc = v => String(v == null ? '' : v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const clone = o => JSON.parse(JSON.stringify(o));
   const rid = () => Math.random().toString(36).slice(2, 9);
-  const can = p => !!S.user && CAN[p].includes(S.user.role);
+  // ผู้ใช้ 1 คนมีได้หลายสิทธิ์ (role = "reviewer,commander")
+  const rolesOf = r => String(r || '').split(',').map(x => x.trim()).filter(Boolean);
+  const hasRole = r => !!S.user && rolesOf(S.user.role).includes(r);
+  const roleLabel = r => rolesOf(r).map(x => ROLE_LABEL[x] || x).join(' + ');
+  const can = p => !!S.user && rolesOf(S.user.role).some(r => CAN[p].includes(r));
+  const LINE_ROLES = ['admin', 'scheduler', 'reviewer', 'commander'];
   function todayKey() { const d = new Date(); return ymd(d); }
   function ymd(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
   function parseKey(k) { const [y, m, d] = k.split('-').map(Number); return new Date(y, m - 1, d); }
@@ -349,7 +354,7 @@
     // ทุกสิทธิ์เปิดที่วันถัดไป (ก่อนวันหยุด = ชุดถึงวันทำการถัดไป)
     const nb = nextBatch(todayKey());
     // ผู้บังคับบัญชา: แสดงชุดล่าสุดจาก cache ทันทีถ้ายังไม่ผ่านไป — server จะเปลี่ยนเป็นชุดที่รอพิจารณาให้ตามหลัง
-    if (S.user && ['commander', 'reviewer'].includes(S.user.role) && c && c.lastRange && c.lastRange.to >= nb.from) return c.lastRange;
+    if ((hasRole('commander') || hasRole('reviewer')) && c && c.lastRange && c.lastRange.to >= nb.from) return c.lastRange;
     return nb;
   }
   function setRefreshing(on) {
@@ -503,7 +508,7 @@
       let users = [];
       try { users = await API.demoUsers(); }
       catch (e) { $('#loginErr').textContent = e.message; return; }
-      $('#demoUsers').innerHTML = users.map(u => `<button class="btn sm ghost" data-u="${esc(u.username)}" data-p="${esc(u.password)}">${esc(ROLE_LABEL[u.role])}</button>`).join('');
+      $('#demoUsers').innerHTML = users.map(u => `<button class="btn sm ghost" data-u="${esc(u.username)}" data-p="${esc(u.password)}">${esc(roleLabel(u.role))}</button>`).join('');
       $('#demoUsers').onclick = e => { const b = e.target.closest('[data-u]'); if (b) doLogin(b.dataset.u, b.dataset.p); };
     }
   }
@@ -583,7 +588,7 @@
         <div class="title">ใบจัดบิน<small>ฝูงบิน 602 กองบิน 6</small></div>
         <button class="user-btn" id="userBtn" aria-haspopup="menu">
           <span class="avatar">${esc((u.displayName || u.username).replace(/^(?:[^\s.]{1,4}\.)+(?:หญิง)?\s*/, '').trim().charAt(0) || 'U')}</span>
-          <span><span class="name">${esc(u.displayName)}</span><span class="role">${esc(ROLE_LABEL[u.role])}</span></span>
+          <span><span class="name">${esc(u.displayName)}</span><span class="role">${esc(roleLabel(u.role))}</span></span>
         </button>
       </header>
       ${API.DEMO ? '<div class="demo-banner">โหมดทดลอง — ข้อมูลอยู่ในเบราว์เซอร์นี้เท่านั้น ใช้ชื่อสมมติ</div>' : ''}
@@ -591,10 +596,10 @@
         `<button role="tab" data-act="tab" data-tab="${k}" class="${S.tab === k ? 'active' : ''}" aria-selected="${S.tab === k}"><span class="ico" aria-hidden="true">${i}</span>${l}</button>`).join('')}</nav>
       <main class="view" id="view"></main>
       <div class="menu" id="menu" role="menu" hidden>
-        <div class="small muted" style="padding:6px 12px">${esc(u.username)} · ${esc(ROLE_LABEL[u.role])}<br>เวอร์ชัน ${APP_VERSION}</div>
+        <div class="small muted" style="padding:6px 12px">${esc(u.username)} · ${esc(roleLabel(u.role))}<br>เวอร์ชัน ${APP_VERSION}</div>
         <button data-act="change-pw">🔑 เปลี่ยนรหัสผ่าน</button>
         <button data-act="refresh-crew">↻ โหลดรายชื่อนักบินล่าสุด</button>
-        ${S.settings.lineConfigured && ['admin', 'scheduler', 'reviewer', 'commander'].includes(u.role) ? '<button data-act="line-self">🔔 รับแจ้งเตือนทาง LINE</button>' : ''}
+        ${S.settings.lineConfigured && rolesOf(u.role).some(r => LINE_ROLES.includes(r)) ? '<button data-act="line-self">🔔 รับแจ้งเตือนทาง LINE</button>' : ''}
         ${API.DEMO && S.settings.lineConfigured ? '<button data-act="line-demo-log">📨 ข้อความ LINE ที่ส่ง (ทดลอง)</button>' : ''}
         ${API.DEMO ? '<button data-act="demo-reset">🧪 รีเซ็ตข้อมูลทดลอง</button>' : ''}
         <button data-act="logout">⎋ ออกจากระบบ</button>
@@ -646,14 +651,14 @@
     const summary = Object.keys(b.c).filter(k => b.c[k]).map(k => `<span class="chip ${k}">${esc(STATUS_LABEL[k])} ${b.multi ? b.c[k] : ''}</span>`).join(' ');
     let batchBanner = '';
     const thing = b.multi ? 'ชุดใบจัดบินนี้' : 'ใบจัดบินนี้';
-    const role = S.user && S.user.role;
-    if (role === 'reviewer') {
-      if (b.c.DRAFT || b.c.NEW || b.c.DENIED) batchBanner = `<div class="banner warn">${thing}ผู้จัดบินยังจัดทำไม่เสร็จ — จะพิจารณาได้เมื่อผู้จัดบินกด "ส่งพิจารณา"</div>`;
-      else if (b.c.REVIEW) batchBanner = `<div class="banner warn">${thing}ส่งมาแล้ว <b>รอการพิจารณาของท่าน</b> — ตรวจแล้วกด "พิจารณาแล้ว · ส่งขออนุมัติ" หรือ "ส่งกลับแก้ไข"</div>`;
-      else if (b.c.PENDING) batchBanner = `<div class="banner info">${thing}ผ่านการพิจารณาแล้ว — รอผู้บังคับบัญชาอนุมัติ</div>`;
-    } else if (role === 'commander') {
-      if (b.c.DRAFT || b.c.NEW || b.c.REVIEW || b.c.DENIED) batchBanner = `<div class="banner warn">${thing}ยังไม่ผ่านผู้พิจารณา${b.c.REVIEW ? ' (อยู่ระหว่างพิจารณา)' : ''} — จะอนุมัติได้เมื่อผู้พิจารณาส่งขออนุมัติ</div>`;
-      else if (b.c.PENDING) batchBanner = `<div class="banner warn">${thing}ผ่านการพิจารณาแล้ว <b>รอการอนุมัติของท่าน</b></div>`;
+    const isRev = hasRole('reviewer'), isCmd = hasRole('commander');   // มีได้ทั้งสองสิทธิ์
+    if (isRev || isCmd) {
+      const notReady = b.c.DRAFT || b.c.NEW || b.c.DENIED;
+      if (isRev && !notReady && b.c.REVIEW) batchBanner = `<div class="banner warn">${thing}ส่งมาแล้ว <b>รอการพิจารณาของท่าน</b> — ตรวจแล้วกด "พิจารณาแล้ว · ส่งขออนุมัติ" หรือ "ส่งกลับแก้ไข"</div>`;
+      else if (isCmd && !notReady && !b.c.REVIEW && b.c.PENDING) batchBanner = `<div class="banner warn">${thing}ผ่านการพิจารณาแล้ว <b>รอการอนุมัติของท่าน</b></div>`;
+      else if (isRev && notReady) batchBanner = `<div class="banner warn">${thing}ผู้จัดบินยังจัดทำไม่เสร็จ — จะพิจารณาได้เมื่อผู้จัดบินกด "ส่งพิจารณา"</div>`;
+      else if (isCmd && (notReady || b.c.REVIEW)) batchBanner = `<div class="banner warn">${thing}ยังไม่ผ่านผู้พิจารณา${b.c.REVIEW ? ' (อยู่ระหว่างพิจารณา)' : ''} — จะอนุมัติได้เมื่อผู้พิจารณาส่งขออนุมัติ</div>`;
+      else if (isRev && b.c.PENDING) batchBanner = `<div class="banner info">${thing}ผ่านการพิจารณาแล้ว — รอผู้บังคับบัญชาอนุมัติ</div>`;
     }
     if (can('editOrder') && b.c.DRAFT + b.c.DENIED) {
       batchBanner += `<div class="banner info">${thing}ยังเป็นร่าง — กด <b>📨 ส่งพิจารณา</b> เพื่อส่งให้ผู้พิจารณาตรวจก่อนส่งขออนุมัติ${b.c.NEW ? ` (ต้องบันทึกให้ครบทุกวันก่อน)` : ''}</div>`;
@@ -740,7 +745,7 @@
         ${dayActs.length ? `<div class="actions">${dayActs.join('')}</div>` : ''}
       </section>
       ${editable() ? editorHtml() : (S.order && !m.hidden ? a4ViewerHtml(docHtml(activeDay())) : '')}
-      ${m.exists && m.log && m.log.length && S.user.role !== 'viewer' ? logHtml(m.log) : ''}`;
+      ${m.exists && m.log && m.log.length && !rolesOf(S.user.role).every(r => r === 'viewer') ? logHtml(m.log) : ''}`;
     mountA4(v);
     $('#rFrom').onchange = e => { const f = e.target.value; if (!f) return; let t = $('#rTo').value; if (!t || t < f) t = f; loadRange(f, t, f).catch(() => {}); };
     $('#rTo').onchange = e => { const t = e.target.value; if (!t) return; let f = $('#rFrom').value; if (!f || f > t) f = t; loadRange(f, t).catch(() => {}); };
@@ -1705,7 +1710,7 @@
     await loadLineLinks();
     if (!S.lineLinks || !S.lineLinks.configured) { toast('ผู้ดูแลระบบยังไม่ได้ตั้งค่า LINE OA', true); return; }
     if (S.lineLinks.me === 'active') {
-      const v = await modal({ title: 'แจ้งเตือนทาง LINE', body: `<p>บัญชีของท่านเชื่อม LINE แล้ว ✅</p><p class="small muted">${S.user.role === 'commander' ? 'จะได้รับแจ้งเมื่อมีใบจัดบินผ่านการพิจารณาและส่งขออนุมัติ' : S.user.role === 'reviewer' ? 'จะได้รับแจ้งเมื่อมีใบจัดบินส่งมาให้พิจารณา' : 'จะได้รับแจ้งเมื่อใบจัดบินที่ท่านส่งถูกส่งกลับแก้ไข ได้รับอนุมัติ หรือไม่อนุมัติ'}</p>`,
+      const v = await modal({ title: 'แจ้งเตือนทาง LINE', body: `<p>บัญชีของท่านเชื่อม LINE แล้ว ✅</p><p class="small muted">${[hasRole('reviewer') ? 'มีใบจัดบินส่งมาให้พิจารณา' : '', hasRole('commander') ? 'มีใบจัดบินผ่านการพิจารณาและส่งขออนุมัติ' : '', can('editOrder') ? 'ใบจัดบินที่ท่านส่งถูกส่งกลับแก้ไข ได้รับอนุมัติ หรือไม่อนุมัติ' : ''].filter(Boolean).map(t => 'จะได้รับแจ้งเมื่อ' + t).join('<br>') || 'เชื่อมแล้ว'}</p>`,
         foot: [{ label: 'ยกเลิกการเชื่อม', cls: 'danger-ghost', value: 'unlink' }].concat(can('settings') ? [{ label: 'ส่งข้อความทดสอบ', cls: 'ghost', value: 'test' }] : [], [{ label: 'ปิด', cls: 'primary', value: null }]) });
       if (v === 'unlink') { await api('lineUnlink', { key: 'user:' + S.user.username }); toast('ยกเลิกการเชื่อม LINE แล้ว'); }
       if (v === 'test') { await api('lineTest', {}); toast('ส่งข้อความทดสอบแล้ว'); }
@@ -1739,11 +1744,11 @@
       [S.users] = await Promise.all([api('listUsers', {}, { quiet: true }), loadLineLinks()]);
       const el = $('#uList'); if (!el) return;
       el.innerHTML = `<div class="tbl-wrap"><table class="tbl cards"><thead><tr><th>ชื่อผู้ใช้</th><th>ชื่อที่แสดง</th><th>สิทธิ์</th><th>สถานะ</th>${S.settings.lineConfigured ? '<th>LINE</th>' : ''}<th>เข้าระบบล่าสุด</th><th></th></tr></thead><tbody>
-        ${S.users.map((u, i) => `<tr><td data-k="ชื่อผู้ใช้"><b>${esc(u.username)}</b></td><td data-k="ชื่อ">${esc(u.displayName)}</td><td data-k="สิทธิ์">${esc(ROLE_LABEL[u.role] || u.role)}</td>
+        ${S.users.map((u, i) => `<tr><td data-k="ชื่อผู้ใช้"><b>${esc(u.username)}</b></td><td data-k="ชื่อ">${esc(u.displayName)}</td><td data-k="สิทธิ์">${esc(roleLabel(u.role))}</td>
           <td data-k="สถานะ">${u.active ? (u.mustChange ? '<span class="chip PENDING">รอเปลี่ยนรหัส</span>' : '<span class="chip APPROVED">ใช้งาน</span>') : '<span class="chip DENIED">ปิดใช้งาน</span>'}</td>
           ${S.settings.lineConfigured ? `<td data-k="LINE">${lineBadge('user:' + u.username)}</td>` : ''}
           <td data-k="ล่าสุด" class="small">${esc(thaiTs(u.lastLogin)) || '—'}</td>
-          <td><div class="row" style="gap:4px"><button class="btn sm ghost" data-act="user-edit" data-i="${i}">แก้ไข</button><button class="btn sm ghost" data-act="user-reset" data-i="${i}">รีเซ็ตรหัส</button>${S.settings.lineConfigured && ['admin', 'scheduler', 'reviewer', 'commander'].includes(u.role) ? `<button class="btn sm ghost" data-act="user-line" data-u="${esc(u.username)}">QR LINE</button>` : ''}</div></td></tr>`).join('')}
+          <td><div class="row" style="gap:4px"><button class="btn sm ghost" data-act="user-edit" data-i="${i}">แก้ไข</button><button class="btn sm ghost" data-act="user-reset" data-i="${i}">รีเซ็ตรหัส</button>${S.settings.lineConfigured && rolesOf(u.role).some(r => LINE_ROLES.includes(r)) ? `<button class="btn sm ghost" data-act="user-line" data-u="${esc(u.username)}">QR LINE</button>` : ''}</div></td></tr>`).join('')}
       </tbody></table></div>`;
     } catch (e) { const el = $('#uList'); if (el) el.innerHTML = `<p class="form-error">${esc(e.message)}</p>`; }
   }
@@ -1751,10 +1756,12 @@
     return `<div class="grid">
       <label class="field"><span>ชื่อผู้ใช้ (a-z 0-9 . _ -)</span><input id="uf_un" value="${esc(u.username)}" ${isNew ? 'autofocus' : 'readonly class="input"'} autocapitalize="none"></label>
       <label class="field"><span>ชื่อที่แสดง (ยศ ชื่อ)</span><input id="uf_dn" value="${esc(u.displayName)}"></label>
-      <label class="field"><span>สิทธิ์</span><select id="uf_role">${Object.keys(ROLE_LABEL).map(r => `<option value="${r}" ${u.role === r ? 'selected' : ''}>${ROLE_LABEL[r]}</option>`).join('')}</select></label>
+      <div class="field"><span>สิทธิ์ (เลือกได้มากกว่า 1)</span><div class="role-picks" id="uf_roles">${Object.keys(ROLE_LABEL).map(r => `<label class="row"><input type="checkbox" value="${r}" ${rolesOf(u.role).includes(r) ? 'checked' : ''}> ${ROLE_LABEL[r]}</label>`).join('')}</div></div>
       ${isNew ? '' : `<label class="row"><input type="checkbox" id="uf_act" ${u.active ? 'checked' : ''}> เปิดใช้งาน</label>`}
       <div class="form-error" id="uf_err"></div></div>`;
   }
+  const pickedRoles = bg => Array.from(bg.querySelectorAll('#uf_roles input:checked')).map(i => i.value);
+  const validRoles = bg => { const ok = pickedRoles(bg).length > 0; if (!ok) $('#uf_err', bg).textContent = 'เลือกสิทธิ์อย่างน้อย 1 อย่าง'; return ok; };
   async function showTempPassword(username, pw) {
     await modal({ title: 'รหัสผ่านชั่วคราว', body: `<p>แจ้งรหัสนี้ให้ <b>${esc(username)}</b> โดยตรง — ระบบจะแสดงเพียงครั้งเดียว และผู้ใช้ต้องเปลี่ยนรหัสเมื่อเข้าระบบครั้งแรก</p>
       <div class="secret">${esc(pw)}</div>`, foot: [{ label: 'คัดลอก', cls: 'ghost', value: 'copy' }, { label: 'ปิด', cls: 'primary', value: null }] })
@@ -1763,7 +1770,7 @@
   Object.assign(ACTIONS, {
     'user-new': async () => {
       const u = await modal({ title: 'เพิ่มผู้ใช้', body: userForm({ username: '', displayName: '', role: 'viewer' }, true),
-        foot: [{ label: 'ยกเลิก', cls: 'ghost', value: null }, { label: 'สร้างบัญชี', cls: 'primary', value: bg => ({ username: $('#uf_un', bg).value, displayName: $('#uf_dn', bg).value, role: $('#uf_role', bg).value }) }] });
+        foot: [{ label: 'ยกเลิก', cls: 'ghost', value: null }, { label: 'สร้างบัญชี', cls: 'primary', value: bg => ({ username: $('#uf_un', bg).value, displayName: $('#uf_dn', bg).value, roles: pickedRoles(bg) }), validate: validRoles }] });
       if (!u) return;
       const r = await api('saveUser', { user: u });
       await showTempPassword(r.username, r.tempPassword); renderView();
@@ -1771,7 +1778,7 @@
     'user-edit': async el => {
       const cur = S.users[+el.dataset.i];
       const u = await modal({ title: 'แก้ไขผู้ใช้', body: userForm(cur, false),
-        foot: [{ label: 'ยกเลิก', cls: 'ghost', value: null }, { label: 'บันทึก', cls: 'primary', value: bg => ({ username: cur.username, displayName: $('#uf_dn', bg).value, role: $('#uf_role', bg).value, active: $('#uf_act', bg).checked }) }] });
+        foot: [{ label: 'ยกเลิก', cls: 'ghost', value: null }, { label: 'บันทึก', cls: 'primary', value: bg => ({ username: cur.username, displayName: $('#uf_dn', bg).value, roles: pickedRoles(bg), active: $('#uf_act', bg).checked }), validate: validRoles }] });
       if (!u) return;
       await api('saveUser', { user: u }); toast('บันทึกแล้ว — ผู้ใช้จะต้องเข้าระบบใหม่หากสิทธิ์เปลี่ยน'); renderView();
     },
@@ -2002,7 +2009,7 @@
         const rg = defaultRangeLocal(c), cached = cachedRange(rg.from, rg.to);
         if (cached) {
           S.date = rg.from; setRange(cached, true); S.refreshing = true; render();
-          bootstrap(['commander', 'reviewer'].includes(S.user.role) ? {} : rg, { background: true, token: S.loadToken || 0 }).catch(e => {
+          bootstrap(hasRole('commander') || hasRole('reviewer') ? {} : rg, { background: true, token: S.loadToken || 0 }).catch(e => {
             setRefreshing(false);
             if (e.code !== 'AUTH') toast('ยังเชื่อมต่อเซิร์ฟเวอร์ไม่ได้ — กำลังแสดงข้อมูลที่บันทึกไว้ในเครื่อง', true);
           });
