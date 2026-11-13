@@ -46,6 +46,9 @@ a { color: var(--navy-2); }
   font-weight: 700; background: var(--blue-2); color: var(--navy-ink); white-space: nowrap; }
 .chip.DRAFT { background: #eceff3; color: var(--ink-2); border: 1px dashed var(--line-strong); }
 .chip.PENDING { background: var(--warn-bg); color: var(--warn); }
+.role-picks { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px 12px; padding: 6px 0; }
+.role-picks label.row { display: flex; align-items: center; gap: 8px; font-weight: 500; color: var(--ink); cursor: pointer; }
+.role-picks input[type=checkbox] { width: 18px; height: 18px; min-height: 0; padding: 0; margin: 0; flex: none; box-shadow: none; }
 .chip.REVIEW { background: #e8e3f8; color: #4a3a8c; }
 .chip.APPROVED { background: var(--ok-bg); color: var(--ok); }
 .chip.DENIED { background: var(--bad-bg); color: var(--bad); }
