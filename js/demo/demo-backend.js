@@ -4,13 +4,14 @@
  */
 (function (root) {
   'use strict';
-  const STATE_KEY = 'fo602_demo_state_v8';
+  const STATE_KEY = 'fo602_demo_state_v9';
 
   const DEMO_USERS = [
     ['admin', 'ผู้ดูแลระบบ (ทดลอง)', 'admin', 'admin1234'],
     ['scheduler', 'ร.อ.จัดบิน ท.', 'scheduler', 'sched1234'],
     ['reviewer', 'น.ท.ผู้พิจารณา ฝ.', 'reviewer', 'rev1234'],
     ['commander', 'น.อ.ผู้บังคับฝูง บ.', 'commander', 'cmdr1234'],
+    ['chief', 'น.อ.ผู้พิจารณาและอนุมัติ ส.', 'reviewer,commander', 'chief1234'],
     ['docs', 'ร.อ.ดูแลเอกสาร ป.', 'documents', 'docs1234'],
     ['viewer', 'จ.อ.ผู้ชม ด.', 'viewer', 'view1234'],
   ];
