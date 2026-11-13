@@ -46,6 +46,7 @@ a { color: var(--navy-2); }
   font-weight: 700; background: var(--blue-2); color: var(--navy-ink); white-space: nowrap; }
 .chip.DRAFT { background: #eceff3; color: var(--ink-2); border: 1px dashed var(--line-strong); }
 .chip.PENDING { background: var(--warn-bg); color: var(--warn); }
+.chip.REVIEW { background: #e8e3f8; color: #4a3a8c; }
 .chip.APPROVED { background: var(--ok-bg); color: var(--ok); }
 .chip.DENIED { background: var(--bad-bg); color: var(--bad); }
 .chip.RELEASED { background: var(--rel-bg); color: var(--rel); }
@@ -287,7 +288,7 @@ code.sel { user-select: all; word-break: break-all; background: var(--blue-2); p
 .doc .d-date { text-align: center; background: var(--blue); font-weight: 700; padding: 2px; font-size: 10.5pt; }
 .doc .d-stamp { display: block; width: fit-content; margin: 0 0 3px auto; font-size: 8pt; font-weight: 800; padding: 1px 6px; border: 1.5px solid; border-radius: 3px; background: #fff; }
 .doc .d-stamp.RELEASED { color: var(--rel); } .doc .d-stamp.APPROVED { color: var(--ok); }
-.doc .d-stamp.PENDING { color: var(--warn); } .doc .d-stamp.NEW, .doc .d-stamp.DRAFT { color: var(--muted); } .doc .d-stamp.DENIED { color: var(--bad); }
+.doc .d-stamp.PENDING { color: var(--warn); } .doc .d-stamp.REVIEW { color: #4a3a8c; } .doc .d-stamp.NEW, .doc .d-stamp.DRAFT { color: var(--muted); } .doc .d-stamp.DENIED { color: var(--bad); }
 .doc .d-sec { background: var(--navy); color: #fff; font-weight: 700; text-align: center; font-size: 9.5pt; padding: 2px; margin-top: 6px; }
 .doc table { width: 100%; border-collapse: collapse; table-layout: fixed; }
 .doc th, .doc td { border: 1px solid var(--line-strong); padding: 2px 5px; font-size: 9pt; vertical-align: top; overflow-wrap: anywhere; }
